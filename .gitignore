@@ -1,0 +1,10 @@
+# macOS
+.DS_Store
+
+# Editor / OS cruft
+*.swp
+*~
+
+# Local working notes (not part of published research)
+.private/
+**/*.local.md
