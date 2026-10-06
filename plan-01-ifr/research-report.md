@@ -35,10 +35,10 @@ KVMem（arXiv 2609.04852）把长上下文组织为 workspace、GPU 页池与每
 | # | 专家席位 | 领域切入点 | 技术决议与架构落地 |
 |---|---|---|---|
 | **E1** | **Google DeepMind Attention Kernel Specialist** | 注意力内核、未归一化对数打分与 LSE 缓存 | **定理确认**：$\operatorname*{argmax}_{j\in C'} \frac{e^{s_j}}{Z} \equiv \operatorname*{argmax}_{j\in C'} s_j$ 严格成立。每 $(l,m,h)$ 只需缓存标量 $Z = \sum_{j \in C_{\text{all}}} e^{s_j}$。消除全局规约除法，使得候选排序完全在未归一化 Logit 空间并行完成。 |
-| **E2** | **OpenAI vLLM Distributed Serving Architect** | PagedAttention 对齐、内存层级与零拷贝 | **两级解耦与无驱逐设计**：L0 身份表与 L1 语义路由完全解耦。质心常驻 Host Pinned DRAM，Posting List 强制按 64KB/256KB 大 Tile 对齐。剪枝只作用于候选索引条目，绝不物理驱逐 KV 内容。 |
+| **E2** | **OpenAI vLLM Distributed Serving Architect** | PagedAttention 对齐、内存层级与零拷贝 | **两级解耦与因果前缀对齐**：L0 身份表遵循 CASA 因果前缀哈希链（$\mathcal{H}_i = \text{SHA256}(\mathcal{H}_{i-1} \mathbin{\Vert} \text{Tokens}_i)$）去重，与 L1 语义路由完全解耦。Posting List 强制按 64KB/256KB 大 Tile 对齐。剪枝只作用于候选索引条目，绝不物理驱逐 KV 内容。 |
 | **E3** | **SGLang RadixAttention Core Developer** | 前缀树剪枝病态与 $f^8$ 悬崖证伪 | **前缀树职责划界**：证明前缀树依时序分支，与语义注意力正交。剪枝 $f$ 比例将导致 $f^8$ 召回悬崖（保 90% 需保留 98.7% 节点）。前缀树仅用于 L0 身份去重，并在 $\|T\| \le \tau$ 时设立 ExactMeanK 穷举旁路。 |
-| **E4** | **Meta FAIR Long-Context Transformer Researcher** | 均值池化秩反转 (Rank Inversion) 病态 | **离散度抗坍缩与双子分裂**：构造并证伪单 token 针尖（$\cos=1.0$）被稀释至 $1/32 = 0.031$ 从而落后于弥散块（$\cos=0.20$）的病态。引入 $dev\_meta = \max_i \|k_i - \bar{k}\|_2 > \theta$，超阈触发针尖/残差双子质心分裂。 |
-| **E5** | **Berkeley AI Research (BAIR) OSDI Systems Lead** | Strata I/O 与 KVMem 重排语义冲突 | **消除原位依赖**：Strata 的零拷贝物理回填假设与 KVMem 紧凑视图 $B_a$ 冲突。采用大 Tile 顺序流式读结合异步 DMA 环形缓冲，彻底抹平 NVMe 读取开销。 |
+| **E4** | **Meta FAIR Long-Context Transformer Researcher** | 均值池化秩反转 (Rank Inversion) 病态 | **离散度抗坍缩与双子分裂**：构造并证伪单 token 针尖（$\cos=1.0$）被稀释至 $1/32 = 0.031$ 从而落后于弥散块（$\cos=0.20$）的病态。引入 $dev\_meta = \max_i \|k_i - \bar{k}\|_2 > \theta$，超阈触发索引空间虚拟双子质心分裂并在 IVF 粗排双重挂载，物理存储严格保持 32-token 不可变原子。 |
+| **E5** | **Berkeley AI Research (BAIR) OSDI Systems Lead** | Strata I/O 与 KVMem 重排语义冲突 | **消除原位依赖与废弃 Delta re-RoPE**：Strata 的零拷贝物理回填假设与 KVMem 紧凑视图 $B_a$ 冲突。废弃物理 Key 重新旋转，全面采用 CASA PagedAttention 逻辑页表映射与 K-Freeze 规范，搭配大 Tile 顺序流式读彻底抹平 NVMe 读取开销。 |
 | **E6** | **CMU Catalyst Lab ML Systems Professor** | IVF Voronoi 胞腔路由与保真悬崖 | **$\rho_{\max} \approx 36\%$ 阈值推导**：基于经验注意力分布（top-8 覆 66.5% mass, $s \approx 1.85$），推导得出丢弃注意力质量安全边界 $\rho_{\max} \approx 36\%$。超出此边界模型生成 token 分布剧烈劣化。 |
 | **E7** | **NVIDIA TensorRT-LLM Microarchitect** | 硬件向量化、批处理 GEMV 与内存排布 | **粗排向量化加速**：256-token 粗质心按连续 FP16 排布在 Host DRAM，利用 AVX-512 / Tensor Core 单指令流完成 Top-$n_{\text{probe}}$ 粗探针打分，规避随机指针跳跃。 |
 | **E8** | **Microsoft Research DeepSpeed/CacheBlend Engineer** | 运行时质量监控与动态降级 | **LSE 丢弃质量动态监控**：运行时实时比对 $\rho = 1 - \frac{\sum_{j \in C'} e^{s_j}}{Z}$。若 $\rho > \rho_{\max}$，动态触发自适应探针扩容 ($n_{\text{probe}} \uparrow$) 或退化为 ExactMeanK 旁路。 |
@@ -92,7 +92,7 @@ flowchart TD
     MERGE --> UNNORM["未归一化对数打分: s_j = (q . k_j) / sqrt(d)"]
     UNNORM --> RANK["argmax Top-8 (无需全局 Softmax 归一化)"]
     RANK --> MASS_CHK{"丢弃质量 rho <= rho_max (36%) ?"}
-    MASS_CHK -- "合规" --> MOVE["packed gather -> bulk H2D -> scatter + delta re-RoPE"]
+    MASS_CHK -- "合规" --> MOVE["packed gather -> bulk H2D -> CASA 页表映射 / K-Freeze 组装"]
     MASS_CHK -- "超标" --> FALLBACK["自适应探针扩展 / Exact 旁路"]
     MOVE --> VIEW["组装 execution view B_a"]
     FALLBACK --> VIEW
@@ -180,7 +180,10 @@ tests/test_plan01_ifr.py::test_anti_collapse_dispersion_and_doublet_split PASSED
 tests/test_plan01_ifr.py::test_ivf_clustering_and_probe_recall PASSED
 tests/test_plan01_ifr.py::test_ifr_two_tier_retriever_pipeline PASSED
 tests/test_plan01_ifr.py::test_uefc_evaluation_gate_and_wilson_ci PASSED
-============================== 5 passed in 0.06s ===============================
+tests/test_plan01_ifr.py::test_prefix_hash_chain_causal_dedup_invariance PASSED
+tests/test_plan01_ifr.py::test_doublet_split_atom_storage_immutability PASSED
+tests/test_plan01_ifr.py::test_needle_block_ivf_coarse_probe_recall PASSED
+============================== 8 passed in 0.07s ===============================
 ```
 
 1. **LSE 缓存未归一化等价性**：验证未归一化 Logit 排序与精确 Softmax 概率排序 100% 逐位一致，丢弃质量数值误差 $< 10^{-6}$。
@@ -188,6 +191,9 @@ tests/test_plan01_ifr.py::test_uefc_evaluation_gate_and_wilson_ci PASSED
 3. **L1 IVF 聚类与探针命中**：验证粗探针子线性候选过滤与高命中率。
 4. **两级流水线与保真悬崖**：验证 $\|T\| \le \tau$ 旁路与 IVF 路由下的丢弃质量严格受控在 $\rho \le 0.36$。
 5. **U-E-F-C 评测门与 Wilson CI**：验证 $D_{\text{eff}} = 1.9$ 校正下的 Wilson 置信区间与全门禁合规逻辑。
+6. **CASA 因果前缀哈希链去重**：验证不同因果上下文相同 Token 的块生成互异哈希，杜绝跨会话污染，同一前缀完全复用。
+7. **CASA 不可变 32-Token 原子存储完整性**：验证双子分裂为纯索引空间虚拟扩展，底层 Key/Value 张量严格保持 `(32, dim)` 连续存储，K-Freeze 不可变。
+8. **IVF 双子质心粗排召回**：验证高离散度针尖块在 Voronoi 粗排中双重挂载，消除均值稀释导致的粗探针漏检。
 
 ---
 

@@ -140,20 +140,24 @@ flowchart LR
 核心算法与测试均已实现并全部通过单元测试与回归测试：
 
 - **核心实现模块**：[`kvmem_fusion/ladder.py`](file:///Users/hai/.gemini/antigravity/scratch/kvmem-strata-fusion/kvmem_fusion/ladder.py)
-  - `apply_rope` / `derope`：高效 2D 旋转与逆旋转变换；
+  - `apply_rope` / `derope`：高效 2D 旋转与逆旋转变换（已向量化，支持标量/1D/多维广播）；
   - `LADDER_TIERS`：FP8 / INT4 / INT2 / MERGED 四档参数化配置；
+  - `get_tier_biases` / `mixed_tier_lse`：为 IFR 检索 LSE Caching 与 CASA 算子提供标准化常数偏置与分区函数接口；
   - `mixed_tier_softmax`：融合 tier-bias $b_t = -\sigma_t^2 / 2$ 的混档 Softmax；
-  - `quad_merge_blocks`：G=4 去位置空间聚类、位置增量与 rank-$r$ 内容残差分解；
+  - `quad_merge_blocks`：G=4 去位置空间聚类、位置增量（附 `fits_int8` 局部窗口校验）与 rank-$r$ 内容残差分解；
   - `hkvd_scores`：CacheBlend 高偏差感知重算优先级评分。
 - **测试验证套件**：[`tests/test_plan02_ladder.py`](file:///Users/hai/.gemini/antigravity/scratch/kvmem-strata-fusion/tests/test_plan02_ladder.py)
   - `test_derope_phase_preservation_high_freq`：验证高频保留（0.999 vs 0.161）；
   - `test_mixed_precision_tier_bias_analytical_mgf`：分析验证矩母函数 $\exp(\sigma^2/2)$ 理论偏置；
   - `test_mixed_tier_softmax_attention_theft_mitigation`：验证低比特块注意力盗窃消除；
   - `test_quad_merge_reconstruction_and_hkvd`：验证 Quad-Merge 精确还原与离群点识别；
-  - `test_p0_gate_criteria_falsification`：验证 M0 门禁 KL 散度下降 $>95\%$。
+  - `test_p0_gate_criteria_falsification`：验证 M0 门禁 KL 散度下降 $>95\%$；
+  - `test_apply_rope_vectorized_broadcasting_shapes`：验证标量/1D/2D 任意张量多维广播下的旋转与无损还原；
+  - `test_ifr_lse_caching_compatibility_and_ranking_invariance`：验证 IFR 检索 LSE 缓存无偏性与非归一化 Argmax 排序单调等价性；
+  - `test_quad_merge_position_delta_int8_bounds`：验证局部连续块（$\le 128$ tokens）严格满足 8-bit 有符号整数范围与非局部溢出边界。
 
 运行验证命令：
 ```bash
 ./.venv/bin/pytest tests/test_plan02_ladder.py -v
-# 输出: 5 passed in 0.20s (100% PASS)
+# 输出: 8 passed in 0.32s (100% PASS)
 ```

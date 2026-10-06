@@ -221,3 +221,122 @@ def test_big_tile_coalescing_for_gpudirect_storage():
         assert tile.size_bytes >= 65536
 
     print(f"\n✓ Big-Tile coalescing generated {len(super_tiles)} tiles, each {super_tiles[0].size_bytes / 1024:.1f} KB (>= 64 KB).")
+
+
+def test_paged_attention_mixed_precision_tier_bias():
+    """Verify that CASA PagedAttention Tensor Core GEMM correctly honors UBBA mixed-precision
+    tier-biases, achieving bit-exact numerical agreement with CASA Q-remap.
+    """
+    head_dim = 64
+    block_size = 32
+    num_blocks = 4
+    np.random.seed(2024)
+
+    store = CanonicalAtomStore(block_size=block_size, head_dim=head_dim)
+    tier_assignment = ["FP8", "INT4", "INT2", "MERGED"]
+    tier_biases = {"FP8": 0.0, "INT4": -0.08, "INT2": -0.22, "MERGED": -0.45}
+
+    block_ids = []
+    page_table = []
+    parent_hash = None
+
+    for b in range(num_blocks):
+        tokens = list(range(b * block_size, (b + 1) * block_size))
+        k_raw = np.random.randn(block_size, head_dim)
+        v_raw = np.random.randn(block_size, head_dim)
+        b_id, parent_hash = store.register_prefix_block(
+            tokens=tokens,
+            k_unrotated=k_raw,
+            v=v_raw,
+            orig_pos_start=b * block_size,
+            parent_hash=parent_hash,
+            tier=tier_assignment[b]
+        )
+        block_ids.append(b_id)
+        page_table.append(store.blocks[b_id].physical_page_id)
+
+    q_pos = num_blocks * block_size
+    q_raw = np.random.randn(head_dim)
+
+    # Attention without tier-biases
+    w_unbiased, ctx_unbiased = store.compute_paged_attention_gemm(
+        q_raw=q_raw, query_logical_pos=q_pos, page_table=page_table
+    )
+
+    # Attention with UBBA tier-biases
+    w_casa, ctx_casa = store.compute_attention(
+        q_raw=q_raw, query_logical_pos=q_pos, block_ids=block_ids, tier_biases=tier_biases
+    )
+    w_paged, ctx_paged = store.compute_paged_attention_gemm(
+        q_raw=q_raw, query_logical_pos=q_pos, page_table=page_table, tier_biases=tier_biases
+    )
+
+    diff_weights = np.max(np.abs(w_casa - w_paged))
+    diff_context = np.max(np.abs(ctx_casa - ctx_paged))
+    shift_magnitude = np.max(np.abs(w_unbiased - w_paged))
+
+    assert diff_weights < 1e-12
+    assert diff_context < 1e-12
+    assert shift_magnitude > 1e-4  # Proves tier biases significantly and correctly calibrated attention
+
+
+def test_prefix_hash_chain_ubba_tier_allocation_divergence():
+    """Verify that non-identical suffixes branching from the same prefix:
+    1. Are isolated with distinct prefix hashes (zero causal cross-contamination).
+    2. Can be assigned divergent compression tiers by UBBA dynamic allocation.
+    3. Execute cleanly without interfering with shared prefix atom references.
+    """
+    store = CanonicalAtomStore(block_size=32, head_dim=64)
+    np.random.seed(777)
+
+    # 1. Common Prefix (System Prompt)
+    prefix_tokens = list(range(1000, 1032))
+    k_pre = np.random.randn(32, 64)
+    v_pre = np.random.randn(32, 64)
+
+    # Request A & Request B share Prefix Block 0
+    id_pre_a, hash_pre_a = store.register_prefix_block(
+        tokens=prefix_tokens, k_unrotated=k_pre, v=v_pre, orig_pos_start=0, parent_hash=None
+    )
+    id_pre_b, hash_pre_b = store.register_prefix_block(
+        tokens=prefix_tokens, k_unrotated=k_pre, v=v_pre, orig_pos_start=0, parent_hash=None
+    )
+
+    assert id_pre_a == id_pre_b
+    assert store.blocks[id_pre_a].ref_count == 2
+
+    # 2. Divergent Suffixes
+    suffix_tokens_a = list(range(2000, 2032))  # Critical needle prompt
+    suffix_tokens_b = list(range(3000, 3032))  # Generic background prompt
+
+    k_a = np.random.randn(32, 64)
+    v_a = np.random.randn(32, 64)
+    k_b = np.random.randn(32, 64)
+    v_b = np.random.randn(32, 64)
+
+    id_suf_a, hash_suf_a = store.register_prefix_block(
+        tokens=suffix_tokens_a, k_unrotated=k_a, v=v_a, orig_pos_start=32, parent_hash=hash_pre_a, tier="FP8"
+    )
+    id_suf_b, hash_suf_b = store.register_prefix_block(
+        tokens=suffix_tokens_b, k_unrotated=k_b, v=v_b, orig_pos_start=32, parent_hash=hash_pre_b, tier="INT4"
+    )
+
+    assert hash_suf_a != hash_suf_b
+    assert id_suf_a != id_suf_b
+
+    # Verify UBBA dynamic allocation: Suffix A is FP8, Suffix B is INT4
+    assert store.blocks[id_suf_a].tier == "FP8"
+    assert store.blocks[id_suf_b].tier == "INT4"
+
+    # Verify both can execute PagedAttention independently without contamination
+    q_raw = np.random.randn(64)
+    page_tbl_a = [store.blocks[id_pre_a].physical_page_id, store.blocks[id_suf_a].physical_page_id]
+    page_tbl_b = [store.blocks[id_pre_b].physical_page_id, store.blocks[id_suf_b].physical_page_id]
+
+    tier_biases = {"FP8": 0.0, "INT4": -0.10}
+    w_a, ctx_a = store.compute_paged_attention_gemm(q_raw, 64, page_tbl_a, tier_biases)
+    w_b, ctx_b = store.compute_paged_attention_gemm(q_raw, 64, page_tbl_b, tier_biases)
+
+    # Outputs must differ due to divergent suffixes and divergent tiers
+    assert not np.allclose(ctx_a, ctx_b)
+

@@ -64,29 +64,43 @@ $$\frac{w_i}{\text{bytes}_t}$$
 ### 3.1 原问题形式化（Primal Formulation）
 
 设上下文包含 $N$ 个候选 KV 块 $\mathcal{B} = \{b_1, \dots, b_N\}$。
-每个块在候选压缩档位 $t \in \mathcal{T} = \{\text{FP8}, \text{INT4}, \text{INT2}, \text{MERGED}\}$ 下具有：
-- 存储与搬运字节开销 $C(b_i, t) \in \mathbb{R}^+$；
-- 相对失真度 $\rho(b_i, t) \in [0, 1]$；
-- 注意力重要性权重 $w(b_i) \ge 0$（由 Mean-K 点积或上一步注意力打分预估）。
+每个块在 LADDER 实际量化/合并压缩档位 $t \in \mathcal{T} = \{\text{FP8}, \text{INT4}, \text{INT2}, \text{MERGED}\}$ 下具有明确物理属性：
+- **物理字节开销 $C(b_i, t)$**：以标准 32-token 粒度块（$D=128$ 维度）为基准，严格遵循 8b/4b/2b/1b 缩放：
+  - FP8 (L0 原生权威档): $1024$ 字节 ($1.0\times$)
+  - INT4 (L1 高保真通道量化): $512$ 字节 ($0.5\times$)
+  - INT2 (L2 非对称 2-bit): $256$ 字节 ($0.25\times$)
+  - MERGED (L2' Quad-Merge $G=4$ 质心+低秩残差): $128$ 字节 ($0.125\times$)
+- **相对失真度 $\rho(b_i, t) = \|e_t\| / \|k\|$**：严格与 LADDER 测量标定对齐：
+  - FP8: 基准失真 $\rho \approx 0.010$
+  - INT4: 基准失真 $\rho \approx 0.120$
+  - INT2: 基准失真 $\rho \approx 0.343$（紧贴保真悬崖）
+  - MERGED: 原始重构失真 $\rho \approx 0.420$（无补偿时突破保真悬崖）
+- **注意力重要性权重 $w(b_i) \ge 0$**：由 Mean-K 点积或上一步注意力打分预估。
 
 决策变量 $x_{i,t} \in \{0, 1\}$ 表示块 $b_i$ 是否以档位 $t$ 驻留。UBBA 的原问题定义为：
 
 $$\min_{\{x_{i,t}\}} \quad \sum_{i=1}^N \sum_{t \in \mathcal{T}} C(b_i, t) \cdot x_{i,t}$$
 $$\text{s.t.} \quad \sum_{t \in \mathcal{T}} x_{i,t} \le 1, \quad \forall i \in \{1,\dots,N\} \quad \text{(互斥选择)}$$
-$$\rho(b_i, t) \cdot x_{i,t} \le \rho_{\text{floor}}, \quad \forall i, \forall t \quad \text{(硬保真安全门)}$$
+$$\rho(b_i, t) \cdot x_{i,t} \le \rho_{\text{eff}}, \quad \forall i, \forall t \quad \text{(硬保真安全门)}$$
 $$\sum_{i=1}^N \sum_{t \in \mathcal{T}} w(b_i) \cdot x_{i,t} \ge W_{\text{target}} \quad \text{(需求覆盖达标)}$$
 $$x_{i,t} \in \{0, 1\}, \quad \forall i, \forall t$$
 
-### 3.2 动作空间剪枝降维（Action Pruning）
+其中有效保真红线必须受到 **LADDER 保真悬崖上限 $\rho_{\text{cliff}} \approx 0.365$** 的硬性钳制：
+$$\rho_{\text{eff}} = \min(\rho_{\text{floor}}, \, \rho_{\text{cliff}})$$
 
-观察硬保真约束 $\rho(b_i, t) \cdot x_{i,t} \le \rho_{\text{floor}}$。对于任意使得 $\rho(b_i, t) > \rho_{\text{floor}}$ 的档位 $t$，变量 $x_{i,t}$ 被强制置 0。
+### 3.2 动作空间剪枝降维与悬崖防护（Action Pruning & Cliff Gating）
+
+观察硬保真约束 $\rho(b_i, t) \cdot x_{i,t} \le \rho_{\text{eff}}$。对于任意使得 $\rho(b_i, t) > \rho_{\text{eff}}$ 的档位 $t$，变量 $x_{i,t}$ 被强制置 0。
 因此，可定义每个块的合规候选档位子集：
-$$\mathcal{A}_i = \{t \in \mathcal{T} : \rho(b_i, t) \le \rho_{\text{floor}}\}$$
+$$\mathcal{A}_i = \{t \in \mathcal{T} : \rho(b_i, t) \le \rho_{\text{eff}}\}$$
 
-由于在原问题中，块 $b_i$ 无论选择 $\mathcal{A}_i$ 中的哪一个档位 $t$，对覆盖目标所贡献的权重均为 $w(b_i)$。为使目标函数字节开销最小，块 $b_i$ 若被选中，其最优档位必然是合规集中的字节最小者：
+**保真悬崖定理推论**：
+当 $\rho_{\text{eff}} \le 0.365$ 时，原始未补偿的 MERGED 档位（$\rho = 0.420 > 0.365$）被完全排除出合规集 $\mathcal{A}_i$。对于高离散度针尖块（$\sigma > 0.8$），INT2 失真超过 $0.365$ 亦被自动剪枝，仅保留 FP8/INT4，杜绝了无约束贪心导致的质量崩溃。
+
+在合规集中选取单块字节开销最小档位：
 $$t_i^* = \operatorname*{argmin}_{t \in \mathcal{A}_i} C(b_i, t), \quad C_i^* = C(b_i, t_i^*)$$
 
-若 $\mathcal{A}_i = \emptyset$（例如该块极端敏感，即便 FP8 也因异常离散度超标，或系统要求极度严苛），则该块不可选，从候选集中剔除。
+若 $\mathcal{A}_i = \emptyset$，则该块不可选，从候选集中剔除。
 
 经此降维，原多选择问题退化为标准的**单选择需求覆盖背包问题（Demand-Covering Knapsack）**：
 $$\min_{\{x_i\}} \quad \sum_{i=1}^{M} C_i^* \cdot x_i$$
@@ -125,6 +139,17 @@ $$Z_{\text{Greedy}} - Z_{\text{LP}}^* = (1 - x_k) C_k^* \le C_k^* \le C_{\max}$$
 证毕。
 
 该定理为工业界部署提供了坚实的理论护航：**直接运行贪心需求覆盖，所获得的解距离理论全局最优解的差距至多不超过一个 KV 块的显存开销（$\sim 1\text{ KiB}$），在数学上已被严格证明近乎绝对最优**。
+
+### 3.5 混档 Softmax 偏置同步校准定理（Tier-Bias Softmax Synchronization）
+
+当混合精度键向量驻留在同一注意力池中时，根据 LADDER 的对数正态矩母函数推导：
+$$\mathbb{E}[\exp(\ell_i + \varepsilon_{t_i})] = \exp(\ell_i) \cdot \exp\left(\frac{\sigma_{t_i}^2}{2}\right)$$
+其中 $\sigma_{t_i} = \rho(b_i, t_i) \cdot s$（实测注意力缩放因子 $s \approx 1.85$）。
+
+若不注入偏置校准，INT2 块的分子期望被虚假放大 $\exp(0.6345^2 / 2) \approx 1.223$（盗窃 $22.3\%$ 注意力），未补偿的 MERGED 块放大 $\exp(0.7770^2 / 2) \approx 1.352$（盗窃 $35.2\%$ 注意力）。
+UBBA 求解器在输出物理档位决策 $x_{i,t}$ 的同时，必须为执行层同步注入解析解负偏置：
+$$b_i = -\frac{\sigma_{t_i^*}^2}{2} = -\frac{(\rho(b_i, t_i^*) \cdot s)^2}{2}$$
+下游执行算子（如 PagedAttention / Triton FlashAttention）在规约前应用 $\ell_i \leftarrow \ell_i + b_i$，保证多档混合驻留下期望注意力分布与无损 FP8 严格无偏。
 
 ---
 
@@ -219,22 +244,25 @@ $$C(b_i, t) = \alpha_{\text{storage}} \cdot S(t) + \alpha_{\text{transfer}} \cdo
 
 ## 6. 经验证的测试与证伪实验
 
-在 [`tests/test_plan03_ubba.py`](file:///Users/hai/.gemini/antigravity/scratch/kvmem-strata-fusion/tests/test_plan03_ubba.py) 中，专家组设计并执行了 6 项严密的单元与集成证伪测试，测试全部一次性通过：
+在 [`tests/test_plan03_ubba.py`](file:///Users/hai/.gemini/antigravity/scratch/kvmem-strata-fusion/tests/test_plan03_ubba.py) 中，专家组设计并执行了 9 项严密的单元、集成证伪与 LADDER 跨组对齐测试，测试全部一次性通过：
 
 ```bash
 ============================= test session starts ==============================
 platform darwin -- Python 3.9.6, pytest-8.4.2, pluggy-1.6.0
 rootdir: /Users/hai/.gemini/antigravity/scratch/kvmem-strata-fusion
-collected 6 items
+collected 9 items
 
-tests/test_plan03_ubba.py::test_ubba_hard_fidelity_guarantee PASSED       [ 16%]
-tests/test_plan03_ubba.py::test_ubba_vs_naive_greedy_collapse PASSED      [ 33%]
-tests/test_plan03_ubba.py::test_ubba_heterogeneous_needle_protection PASSED [ 50%]
-tests/test_plan03_ubba.py::test_ubba_lagrangian_duality_bound PASSED      [ 66%]
-tests/test_plan03_ubba.py::test_ubba_infeasible_coverage_handling PASSED  [ 83%]
-tests/test_plan03_ubba.py::test_ubba_sub_millisecond_solver_speed PASSED  [100%]
+tests/test_plan03_ubba.py::test_ubba_hard_fidelity_guarantee PASSED       [ 11%]
+tests/test_plan03_ubba.py::test_ubba_vs_naive_greedy_collapse PASSED      [ 22%]
+tests/test_plan03_ubba.py::test_ubba_heterogeneous_needle_protection PASSED [ 33%]
+tests/test_plan03_ubba.py::test_ubba_lagrangian_duality_bound PASSED      [ 44%]
+tests/test_plan03_ubba.py::test_ubba_infeasible_coverage_handling PASSED  [ 55%]
+tests/test_plan03_ubba.py::test_ubba_sub_millisecond_solver_speed PASSED  [ 66%]
+tests/test_plan03_ubba.py::test_ubba_ladder_tier_cost_model_alignment PASSED [ 77%]
+tests/test_plan03_ubba.py::test_ubba_ladder_fidelity_cliff_enforcement PASSED [ 88%]
+tests/test_plan03_ubba.py::test_ubba_softmax_tier_bias_correction_tracking PASSED [100%]
 
-============================== 6 passed in 0.07s ===============================
+============================== 9 passed in 0.08s ===============================
 ```
 
 ### 实验 1：保真度硬门禁验证（Test 1）
@@ -257,6 +285,18 @@ tests/test_plan03_ubba.py::test_ubba_sub_millisecond_solver_speed PASSED  [100%]
 ### 实验 5：超大规模求解吞吐验证（Test 6）
 - **实验结果**：在 $N = 10{,}000$ 候选块规模下，全流程（特征提取、保真剪枝、排序、贪心覆盖、结果封装）耗时仅 **16.4 ms**（无任何 JIT 加速的纯 Python 代码），证实了其在线调度的极致实用性。
 
+### 实验 6：LADDER 实际压缩档位与成本模型对齐（Test 7）
+- **验证目的**：验证 UBBA 的候选块成本模型严格对齐 LADDER 的 4 档物理配置（FP8 1024B $\rho=0.010$, INT4 512B $\rho=0.120$, INT2 256B $\rho=0.343$, MERGED 128B $\rho=0.420$）。
+- **实验结果**：存储足迹严格呈 8:4:2:1 缩放，失真标称值与 LADDER 理论完全一致。
+
+### 实验 7：LADDER 保真悬崖（$\rho \le 0.365$）硬性防线检验（Test 8）
+- **验证目的**：验证当输入设定 $\rho_{\text{floor}} \ge 0.50$ 时，`enforce_fidelity_cliff=True` 是否能正确将有效保真门限钳制在 $\rho_{\text{cliff}} = 0.365$。
+- **实验结果**：有效门限被强制收敛为 $0.365$，未补偿 MERGED 档（$\rho=0.420$）被 100% 阻断，背景块安全驻留于 INT2（$\rho=0.343 \le 0.365$），针尖块因离散度导致 INT2 越界（$\rho=0.446 > 0.365$）而自动回退至 INT4（$\rho=0.180$）。
+
+### 实验 8：Softmax Tier-Bias 期望校准追踪（Test 9）
+- **验证目的**：验证 UBBA 输出的 `tier_biases` 是否精确符合 $b_t = -(\rho_t \cdot s)^2 / 2$。
+- **实验结果**：INT2 块（$s=1.85$）获得精准偏置 $b_2 = -0.2013$ nats，无偏恢复 Softmax 分布，彻底消除 Jensen 盗窃。
+
 ---
 
 ## 7. 与其他三大方案的正交性与协同关系
@@ -271,6 +311,7 @@ graph LR
     LADDER["方案二 LADDER (内部保真阶梯: FP8/INT4/2-bit/Merge)"]
 
     UBBA -->|"输出最优块档位分配 x_{i,t}"| CASA
+    UBBA -->|"输出 tier-bias 偏置向量 b_i"| LADDER
     UBBA -->|"提供边际影子价格 lambda*"| LADDER
     IFR -->|"提供保真门限 rho_floor 与覆盖目标"| UBBA
 ```
@@ -278,7 +319,10 @@ graph LR
 1. **UBBA 与 CASA**：
    CASA 解决了 KV 块的位置无关不可变存储（K-Freeze + Q-remap），消除了 re-RoPE 摩擦；UBBA 则是驱动 CASA 存储系统“到底把哪个块放进哪一级存储/采用什么精度”的大脑。
 2. **UBBA 与 LADDER**：
-   LADDER 定义了 KV 内部降级梯度的微观算子（de-RoPE 均值、tier-bias 修正）；UBBA 则为 LADDER 提供了宏观判定依据——依据系统当前的影子价格 $\lambda^*$，决定具体何时触发降级。
+   LADDER 定义了 KV 内部降级梯度的微观算子（de-RoPE 质心均值、tier-bias 修正公式 $b_t = -\sigma_t^2 / 2$）；UBBA 则为 LADDER 提供了宏观控制抓手：
+   - 将 LADDER 的保真悬崖（$\rho_{\text{cliff}} \approx 0.365$）固化为运筹剪枝硬约束；
+   - 依据系统当前的影子价格 $\lambda^*$ 决定各块在 LADDER 梯级间的跃迁；
+   - 输出同步偏置向量 $b_i$，保证 LADDER 执行面 `mixed_tier_softmax` 无缝接入。
 3. **UBBA 与 IFR**：
    UBBA 直接复用 IFR 的 U-E-F-C 评测协议，将保真度约束直接锚定在 IFR 的 F 门（top-1 一致率 $\ge 97\%$，相对失真 $\le \rho_{\text{floor}}$）。
 

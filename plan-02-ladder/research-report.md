@@ -124,6 +124,22 @@ $$\mathbb{E}[\exp(\ell' )] = \mathbb{E}[\exp(\ell + \varepsilon_t + b_t)] = \exp
 $$b_t + \frac{\sigma_t^2}{2} = 0 \implies b_t = -\frac{\sigma_t^2}{2} = -\frac{(\rho_t \cdot s)^2}{2}$$
 证毕。$\blacksquare$
 
+#### 2.2.1 混档 Softmax 归一化二阶余项与 IFR LSE Caching 严格自洽性
+
+1. **二阶 Delta 展开与实测残差**：  
+   偏置 $b_t = -\sigma_t^2/2$ 使非归一化权重 $X_i = \exp(\ell_i + \varepsilon_t + b_t)$ 的期望严格无偏（$\mathbb{E}[X_i] = \exp(\ell_i)$）。  
+   对于归一化后的 Softmax 概率 $P_i = X_i / \sum_j X_j$，根据多元二阶 Delta 展开：
+   $$\mathbb{E}[P_i] \approx p_i + p_i \left( \sum_{j=1}^N p_j^2 \sigma_j^2 - p_i \sigma_i^2 \right)$$
+   当 Needle $i$ 处于高精度档（FP8, $\sigma_0 \approx 0$）且占据主导权重（$p_i \approx 0.6$）时，$-p_i \sigma_0^2 \approx 0$，而干扰项 $\sum_{j \ne i} p_j^2 \sigma_j^2 > 0$，导致归一化后存在微弱的二阶正向保守偏移（实测 Needle 概率从真值 $0.5918$ 提升至 $0.5991$，即 $+0.0073$）。该二阶效应恒使高置信度 Needle 免受侵蚀，具备防御性自洽。
+
+2. **IFR 检索 LSE Caching 的严格兼容性**：  
+   在 Group 1 (IFR) 的分层检索流程中，候选块评分依赖 Log-Sum-Exp 缓存：$LSE = \ln \sum_j \exp(s_j)$。  
+   - **单调排序不变性**：注入 $b_t$ 后，校准分数为 $\tilde{s}_j = s_j + b_{t_j}$。由于 Softmax 概率单调递增于 $\tilde{s}_j$，IFR 的非归一化 Argmax 排序（$\text{argmax}_j \tilde{s}_j \equiv \text{argmax}_j P_j$）在混档下保持绝对单调等价。  
+   - **配分函数期望无偏**：全集配分函数期望 $\mathbb{E}[Z_{\text{corrected}}] = \sum_j \mathbb{E}[\exp(\tilde{s}_j)] = \sum_j \exp(s_{j, \text{clean}}) = Z_{\text{gt}}$，彻底消除了未校准混档下配分函数虚高（实测虚高 $\sim 4.1\%$）对丢弃注意力质量（Discarded Attention Mass $\rho$）追踪的系统性漂移。
+
+3. **Quad-Merge 位置增量 8-bit 界与局部性窗口**：  
+   位置增量 $\delta_{g, j} = p_{g, j} - \bar{p}_j$ 压缩为有符号 8-bit 整数（$[-128, 127]$，占用 2.5 GiB）的前提是 4 个合并块位于局部聚类窗口（最大跨度 $\le 256$ tokens）。对于跨段落的非局部合并（跨度 $> 256$ tokens），系统需额外记录 32-bit 块基地址指针 $p_g^{\text{base}}$（每个 32-token 块仅占 4 字节，全 10M 上下文总开销仅 1.25 MB），此时 $\delta$ 为块内增量，依旧位精确无溢出。
+
 ---
 
 ### 2.3 定理 3：保真悬崖 $\rho_{max}(N)$ 的极值分布界

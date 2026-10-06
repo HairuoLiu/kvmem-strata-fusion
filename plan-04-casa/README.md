@@ -68,6 +68,8 @@
 - `tests/test_plan04_casa.py`：
   1. `test_prefix_hash_chain_causal_invariance`：验证前缀哈希链对发散上文的严格隔离与对相同因果前缀的完全复用；
   2. `test_paged_attention_tensor_core_equivalence`：验证基于页表的纯 GEMM PagedAttention 与标准 RoPE 全文注意力达到 Machine Epsilon $< 10^{-12}$ 位级一致；
-  3. `test_big_tile_coalescing_for_gpudirect_storage`：验证 32-token 细粒度逻辑块聚合成 128 KB+ Super-Tile，满足 cuFile 满载阈值。
+  3. `test_big_tile_coalescing_for_gpudirect_storage`：验证 32-token 细粒度逻辑块聚合成 128 KB+ Super-Tile，满足 cuFile 满载阈值；
+  4. `test_paged_attention_mixed_precision_tier_bias`：验证 PagedAttention GEMM 原生支持 UBBA 混合精度动态偏置 Softmax，与 Q-remap 达成 $< 10^{-12}$ 位级一致；
+  5. `test_prefix_hash_chain_ubba_tier_allocation_divergence`：验证前缀哈希链支持共享前缀下分支后缀的零因果污染隔离与 UBBA 异构 Tier 动态分配。
 - `tests/test_casa_core.py`：测试基础去重与代数等价性。
 - `tests/test_phase0_math.py`：测试 Phase 0 RoPE 频域保留与 K-Freeze 等价定理。

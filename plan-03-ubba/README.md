@@ -34,22 +34,28 @@ $$\rho(b_i, t) \le \rho_{\text{floor}}, \quad \forall (i, t) \text{ with } x_{i,
 $$\sum_{i=1}^N \sum_{t \in \mathcal{T}} w(b_i) \cdot x_{i,t} \ge W_{\text{target}} \quad \text{(注意力覆盖率达标)}$$
 
 其中：
-- $C(b_i, t)$：候选块 $b_i$ 在档位 $t \in \{\text{FP8}, \text{INT4}, \text{INT2}, \text{MERGED}\}$ 下的物理字节开销；
-- $\rho(b_i, t)$：相对失真度（相对于原始未经量化的键值向量误差或注意力散度）；
+- $C(b_i, t)$：候选块 $b_i$ 在 LADDER 实际压缩档位 $t \in \{\text{FP8}, \text{INT4}, \text{INT2}, \text{MERGED}\}$ 下的物理字节开销（基准 32-token 分别为 1024B, 512B, 256B, 128B，严格对应 8b/4b/2b/1b 缩放）；
+- $\rho(b_i, t)$：相对失真度，与 LADDER 实测基线对齐：FP8（$\rho=0.010$）、INT4（$\rho=0.120$）、INT2（$\rho=0.343$）、MERGED（$\rho=0.420$）；
 - $w(b_i)$：块重要性权重（由 Mean-K 或查询-键注意力预估质量确定）；
-- $\rho_{\text{floor}}$：系统设定的不可逾越的保真度红线（如 $\rho \le 0.10$）。
+- $\rho_{\text{floor}}$：系统设定的保真度红线，受 **LADDER 保真悬崖上限（$\rho_{\text{cliff}} \approx 0.365$）** 约束：
+  $$\rho_{\text{floor}} \le \rho_{\text{cliff}} = 0.365$$
+  若未做 HKVD 动态重算补偿，$\rho > 0.365$ 的重压缩档位（如原始 MERGED $\rho=0.420$）被 `enforce_fidelity_cliff` 强制阻断，杜绝注意力崩溃；
+- **混档 Softmax 偏置注入（Tier-Bias Correction）**：
+  为彻底消除 Jensen 不等式对数正态期望偏差 $\mathbb{E}[\exp(\ell + \varepsilon)] = \exp(\ell + \sigma_t^2/2)$ 导致的低比特块注意力盗窃，UBBA 求解器为每个分配块同步导出偏置校准向量：
+  $$b_t = -\frac{\sigma_t^2}{2} = -\frac{(\rho_t \cdot s)^2}{2} \quad (s \approx 1.85)$$
+  直接注入下游注意力算子（FP8: $-0.00017$ nats, INT4: $-0.0246$ nats, INT2: $-0.2013$ nats, MERGED: $-0.3019$ nats）。
 
 ---
 
 ## 3. 算法核心步骤
 
-1. **动作空间硬剪枝（Fidelity Pruning）**：
-   对每个块 $b_i$，构建保真度合规候选集 $\mathcal{A}_i = \{t \in \mathcal{T} : \rho(b_i, t) \le \rho_{\text{floor}}\}$。若 $\mathcal{A}_i = \emptyset$，该块在当前保真要求下不可保留（或降级为丢弃）。在合规集中选取单块字节开销最小档位：
+1. **动作空间硬剪枝与悬崖钳制（Fidelity Pruning & Cliff Clamping）**：
+   有效保真门限钳制为 $\rho_{\text{eff}} = \min(\rho_{\text{floor}}, \rho_{\text{cliff}})$。对每个块 $b_i$，构建合规候选集 $\mathcal{A}_i = \{t \in \mathcal{T} : \rho(b_i, t) \le \rho_{\text{eff}}\}$。在合规集中选取单块字节开销最小档位：
    $$t_i^* = \operatorname*{argmin}_{t \in \mathcal{A}_i} C(b_i, t), \quad C_i^* = C(b_i, t_i^*)$$
 2. **边际效益排序（Efficiency Ranking）**：
    计算单位字节覆盖效率 $\eta_i = \frac{w(b_i)}{C_i^*}$，按 $\eta_i$ 降序（即单位覆盖字节成本 $\frac{C_i^*}{w(b_i)}$ 升序）排列。
-3. **贪心需求覆盖与对偶截断（Greedy Demand Accumulation）**：
-   按顺序累加块权重 $\sum w(b_i)$，直至达到 $W_{\text{target}}$ 即刻截断。截断边界处的比率即为拉格朗日乘子（影子价格）$\lambda^* = \frac{C_k^*}{w(b_k)}$。
+3. **贪心需求覆盖与偏置导出（Greedy Accumulation & Bias Export）**：
+   按顺序累加块权重 $\sum w(b_i)$ 直至满足 $W_{\text{target}}$；同步导出离散分配向量 $x_{i,t}$、影子价格 $\lambda^* = \frac{C_k^*}{w(b_k)}$ 以及注意力偏置向量 $b_i = b_{t_i^*}$。
 
 ---
 
@@ -57,8 +63,8 @@ $$\sum_{i=1}^N \sum_{t \in \mathcal{T}} w(b_i) \cdot x_{i,t} \ge W_{\text{target
 
 | 模块 / 文件 | 功能说明 | 状态 |
 |---|---|---|
-| [`kvmem_fusion/ubba.py`](file:///Users/hai/.gemini/antigravity/scratch/kvmem-strata-fusion/kvmem_fusion/ubba.py) | UBBA 需求覆盖运筹求解器、拉格朗日对偶松弛与贪心崩溃基线实现 | ✅ 已实现 |
-| [`tests/test_plan03_ubba.py`](file:///Users/hai/.gemini/antigravity/scratch/kvmem-strata-fusion/tests/test_plan03_ubba.py) | 覆盖保真度硬约束、-12.7pp 崩溃反例、针尖保护、对偶间隙有界、10k 规模性能等 6 项测试 | ✅ 100% 通过 (pytest) |
+| [`kvmem_fusion/ubba.py`](file:///Users/hai/.gemini/antigravity/scratch/kvmem-strata-fusion/kvmem_fusion/ubba.py) | UBBA 运筹求解器、LADDER 档位对齐、悬崖硬门禁（$\rho \le 0.365$）、Softmax tier-bias 导出及拉格朗日对偶二分实现 | ✅ 已实现 |
+| [`tests/test_plan03_ubba.py`](file:///Users/hai/.gemini/antigravity/scratch/kvmem-strata-fusion/tests/test_plan03_ubba.py) | 覆盖保真度硬约束、-12.7pp 崩溃反例、针尖保护、对偶间隙有界、LADDER 档位对齐、悬崖钳制、Softmax 偏置跟踪等 9 项测试 | ✅ 100% 通过 (pytest) |
 | [`research-report.md`](file:///Users/hai/.gemini/antigravity/scratch/kvmem-strata-fusion/plan-03-ubba/research-report.md) | 10 专家评审团联合签署的深度研究报告（含完整数学证明、架构图、基准数据与退役门槛） | ✅ 已完成 |
 
 ---

@@ -322,3 +322,174 @@ def test_uefc_evaluation_gate_and_wilson_ci():
     assert gate_result_fail["gate_u"]["passed"] is False
 
     print(f"✓ U-E-F-C Evaluation Gate & Cluster-Robust Wilson CI CONFIRMED.")
+
+
+def test_prefix_hash_chain_causal_dedup_invariance():
+    """
+    CASA Cross-Examination Invariant Audit:
+    Verify that L0 identity deduplication strictly obeys causal prefix hash chaining.
+    Two blocks sharing identical token IDs under divergent causal contexts (different parent hashes)
+    must NOT collide or collapse into the same storage atom.
+    Identical tokens under the identical parent hash MUST deduplicate.
+    """
+    dim = 64
+    retriever = IFRRetriever(dim=dim)
+    shared_tokens = [42] * 32
+    keys = np.random.randn(32, dim)
+    vals = np.random.randn(32, dim)
+
+    parent_hash_a = "parent_context_session_alpha"
+    parent_hash_b = "parent_context_session_beta"
+
+    block_a = IFRBlock(
+        block_id="atom_session_a",
+        tokens=shared_tokens,
+        keys=keys,
+        values=vals,
+        orig_pos_start=100,
+        parent_hash=parent_hash_a
+    )
+
+    block_b = IFRBlock(
+        block_id="atom_session_b",
+        tokens=shared_tokens,
+        keys=keys,
+        values=vals,
+        orig_pos_start=100,
+        parent_hash=parent_hash_b
+    )
+
+    id_a = retriever.add_block(block_a)
+    id_b = retriever.add_block(block_b)
+
+    # Invariant: Divergent causal history must produce distinct identities!
+    assert id_a != id_b, "Causal violation: identical tokens under divergent prefixes collapsed into same block!"
+    assert len(retriever.blocks) == 2
+
+    # A third block under the SAME parent hash as Block A must deduplicate
+    block_c = IFRBlock(
+        block_id="atom_session_a_replay",
+        tokens=shared_tokens,
+        keys=keys,
+        values=vals,
+        orig_pos_start=100,
+        parent_hash=parent_hash_a
+    )
+    id_c = retriever.add_block(block_c)
+    assert id_c == id_a, "Expected identical prefix chain to deduplicate!"
+    assert len(retriever.blocks) == 2
+    print("\n✓ CASA Invariant 1 Confirmed: Prefix-chained causal deduplication protects against cross-context contamination.")
+
+
+def test_doublet_split_atom_storage_immutability():
+    """
+    CASA Cross-Examination Invariant Audit:
+    Verify that IFR doublet splitting is purely an index-space virtual expansion
+    and strictly preserves the 32-token physical storage atom:
+    1. The underlying keys and values retain shape (32, dim) without fragmentation.
+    2. Candidate mapping maps both sub-centroids to the identical single 32-token block ID.
+    3. Retrieval returns the unfragmented 32-token block ID, preserving PagedAttention alignment.
+    """
+    dim = 64
+    np.random.seed(404)
+    query = np.zeros(dim)
+    query[0] = 1.0
+
+    # Needle block
+    keys_needle = np.zeros((32, dim))
+    keys_needle[0, 0] = 1.0
+    for i in range(1, 32):
+        keys_needle[i, 1] = 0.5
+
+    block = IFRBlock(
+        block_id="atom_needle_001",
+        tokens=list(range(32)),
+        keys=keys_needle,
+        values=np.random.randn(32, dim),
+        orig_pos_start=0
+    )
+
+    # Check physical storage shape before splitting
+    assert block.keys.shape == (32, dim)
+    assert block.values.shape == (32, dim)
+
+    splitter = AntiCollapseSplitter(dispersion_threshold=0.85)
+    is_split, doublets = splitter.inspect_and_split(block)
+
+    assert is_split is True
+    assert len(doublets) == 2
+    # Physical storage MUST remain 32 tokens!
+    assert block.keys.shape == (32, dim)
+    assert block.values.shape == (32, dim)
+    assert len(block.tokens) == 32
+
+    # Verify retriever returns the single block ID and does not emit sub-fragments
+    retriever = IFRRetriever(dim=dim, tau_exact_bypass=1)
+    retriever.add_block(block)
+
+    # Add 10 background distractor blocks
+    for i in range(10):
+        blk = IFRBlock(
+            block_id=f"atom_bg_{i:03d}",
+            tokens=list(range((i + 1) * 32, (i + 2) * 32)),
+            keys=0.01 * np.random.randn(32, dim),
+            values=np.random.randn(32, dim),
+            orig_pos_start=(i + 1) * 32
+        )
+        retriever.add_block(blk)
+
+    retriever.build_index()
+    selected_blocks, meta = retriever.retrieve(query)
+
+    # Output is a list of full 32-token atom IDs
+    assert block.block_id in selected_blocks
+    assert all(isinstance(bid, str) for bid in selected_blocks)
+    print("\n✓ CASA Invariant 2 Confirmed: Doublet splitting is purely index-space; physical 32-token atom storage is immutable.")
+
+
+def test_needle_block_ivf_coarse_probe_recall():
+    """
+    CASA Cross-Examination Invariant Audit:
+    Verify that needle blocks with diluted mean-K are successfully retrieved
+    through coarse Voronoi IVF clusters via doublet centroid dual-posting.
+    """
+    dim = 64
+    np.random.seed(505)
+    query = np.zeros(dim)
+    query[0] = 1.0
+
+    # Needle block: needle along axis 0, 31 orthogonal tokens along axis 1
+    # Diluted mean projection along axis 0 is 1/32 = 0.03125
+    keys_needle = np.zeros((32, dim))
+    keys_needle[0, 0] = 1.0
+    keys_needle[1:, 1] = 1.0
+
+    blk_needle = IFRBlock(
+        block_id="needle_target_atom",
+        tokens=list(range(32)),
+        keys=keys_needle,
+        values=np.random.randn(32, dim),
+        orig_pos_start=0
+    )
+
+    # Create 80 distractor blocks in diverse directions
+    blocks = [blk_needle]
+    for i in range(1, 80):
+        k = np.random.randn(32, dim) * 0.5
+        blocks.append(
+            IFRBlock(
+                block_id=f"distractor_{i:03d}",
+                tokens=list(range(i * 32, (i + 1) * 32)),
+                keys=k,
+                values=np.random.randn(32, dim),
+                orig_pos_start=i * 32
+            )
+        )
+
+    index = IVFMeanKIndex(dim=dim, n_clusters=16, n_probe=3)
+    index.train_and_index(blocks)
+
+    probed_candidates = index.probe_candidates(query)
+    # The needle block must be routed and retrieved despite mean-K dilution
+    assert "needle_target_atom" in probed_candidates, "Needle block was dropped by coarse IVF probe due to mean-K dilution!"
+    print("\n✓ IVF Doublet Dual-Posting Confirmed: Coarse Voronoi routing successfully retrieves needle blocks.")

@@ -19,12 +19,33 @@ import time
 import numpy as np
 
 
+# LADDER hard fidelity cliff boundary (rho <= 0.365)
+LADDER_FIDELITY_CLIFF: float = 0.365
+
+# LADDER ground-truth tier parameters
+LADDER_TIER_SPECS: Dict[str, Dict[str, float]] = {
+    "FP8": {"bits": 8.0, "rho": 0.010, "bytes_ratio": 1.0},
+    "INT4": {"bits": 4.0, "rho": 0.120, "bytes_ratio": 0.5},
+    "INT2": {"bits": 2.0, "rho": 0.343, "bytes_ratio": 0.25},
+    "MERGED": {"bits": 1.0, "rho": 0.420, "bytes_ratio": 0.125},
+}
+
+
 @dataclass
 class TierProfile:
     """Attributes of a candidate compression tier for a KV block."""
     tier_name: str          # e.g., 'FP8', 'INT4', 'INT2', 'MERGED'
     bytes_per_block: int    # Storage footprint in bytes
     distortion_rho: float   # Relative distortion rho in [0, 1]
+
+    def get_tier_bias(self, s: float = 1.85) -> float:
+        """Compute LADDER Softmax tier-bias correction: b_t = -(rho_t * s)^2 / 2.
+        
+        Neutralizes Jensen's inequality attention logit theft:
+        E[exp(ell + eps_t)] = exp(ell) * exp(sigma_t^2 / 2).
+        """
+        sigma = self.distortion_rho * s
+        return -(sigma ** 2) / 2.0
 
 
 @dataclass
@@ -43,6 +64,26 @@ class KVBlockCandidate:
         )
 
 
+def create_ladder_block_candidate(
+    block_id: str,
+    weight: float,
+    dispersity: float = 0.0,
+    base_bytes: int = 1024,
+) -> KVBlockCandidate:
+    """Instantiate a KVBlockCandidate strictly adhering to LADDER's actual compression tiers:
+    - FP8: 8.0 bits (1024 bytes), rho = 0.010
+    - INT4: 4.0 bits (512 bytes), rho = 0.120 * (1.0 + 0.5 * dispersity)
+    - INT2: 2.0 bits (256 bytes), rho = 0.343 * (1.0 + 0.3 * dispersity)
+    - MERGED: 1.0 bit (128 bytes), rho = 0.420 * (1.0 + 0.2 * dispersity)
+    """
+    blk = KVBlockCandidate(block_id=block_id, weight=weight, dispersity=dispersity)
+    blk.add_tier("FP8", base_bytes, 0.010)
+    blk.add_tier("INT4", int(base_bytes * 0.5), 0.120 * (1.0 + 0.5 * dispersity))
+    blk.add_tier("INT2", int(base_bytes * 0.25), 0.343 * (1.0 + 0.3 * dispersity))
+    blk.add_tier("MERGED", int(base_bytes * 0.125), 0.420 * (1.0 + 0.2 * dispersity))
+    return blk
+
+
 @dataclass
 class UBBAResult:
     """Output allocation and telemetry produced by the UBBA solver."""
@@ -59,6 +100,7 @@ class UBBAResult:
     duality_gap: float                # Upper bound on LP-relaxation duality gap
     solver_latency_ms: float          # Solver runtime in milliseconds
     is_feasible: bool                 # True if achieved_coverage >= target_coverage
+    tier_biases: Dict[str, float] = field(default_factory=dict)  # block_id -> tier_bias b_t
 
 
 def solve_ubba_greedy(
@@ -66,13 +108,16 @@ def solve_ubba_greedy(
     target_coverage: float,
     rho_floor: float = 0.10,
     enforce_min_tier: bool = False,
+    enforce_fidelity_cliff: bool = True,
+    s_scale: float = 1.85,
 ) -> UBBAResult:
     """
     Solves the UBBA Minimum-Cost Demand-Covering Knapsack problem using
     Fidelity-Gated Greedy selection:
 
     1. Action Pruning (Hard Fidelity Gate):
-       For each block b_i, filter candidate tiers to A_i = {t : rho(b_i, t) <= rho_floor}.
+       Clamps rho_floor to LADDER_FIDELITY_CLIFF (0.365) if enforce_fidelity_cliff=True.
+       For each block b_i, filter candidate tiers to A_i = {t : rho(b_i, t) <= effective_rho_floor}.
        Among admissible tiers, identify the minimum byte-cost tier:
            t_i* = argmin_{t in A_i} C(b_i, t),  with cost C_i* = C(b_i, t_i*).
        If A_i is empty, the block is inadmissible (cannot be retained without fidelity breach).
@@ -86,16 +131,21 @@ def solve_ubba_greedy(
     """
     t_start = time.perf_counter()
 
+    effective_rho_floor = (
+        min(rho_floor, LADDER_FIDELITY_CLIFF) if enforce_fidelity_cliff else rho_floor
+    )
+
     # Step 1: Fidelity Gating & Tier Selection per Block
-    admissible_items: List[Tuple[float, int, str, str, float]] = []
-    # Tuples: (efficiency = w/C, cost C, block_id, tier_name, rho)
+    admissible_items: List[Tuple[float, int, str, str, float, float]] = []
+    # Tuples: (efficiency = w/C, cost C, block_id, tier_name, rho, weight)
 
     total_admissible_weight = 0.0
+    block_map = {blk.block_id: blk for blk in blocks}
 
     for blk in blocks:
         valid_tiers = [
             tp for tp in blk.tier_profiles.values()
-            if tp.distortion_rho <= rho_floor
+            if tp.distortion_rho <= effective_rho_floor
         ]
         if not valid_tiers:
             continue
@@ -117,6 +167,7 @@ def solve_ubba_greedy(
 
     # Step 3: Greedy Accumulation
     allocated_tiers: Dict[str, str] = {}
+    tier_biases: Dict[str, float] = {}
     total_bytes = 0
     cum_weight = 0.0
     selected_rhos: List[float] = []
@@ -125,6 +176,9 @@ def solve_ubba_greedy(
 
     for eff, cost, blk_id, tier_name, rho, weight in admissible_items:
         allocated_tiers[blk_id] = tier_name
+        tp = block_map[blk_id].tier_profiles[tier_name]
+        tier_biases[blk_id] = tp.get_tier_bias(s=s_scale)
+
         total_bytes += cost
         cum_weight += weight
         selected_rhos.append(rho)
@@ -145,7 +199,7 @@ def solve_ubba_greedy(
         total_bytes=total_bytes,
         achieved_coverage=cum_weight,
         target_coverage=target_coverage,
-        rho_floor=rho_floor,
+        rho_floor=effective_rho_floor,
         max_rho=max_rho,
         mean_rho=mean_rho,
         num_blocks_selected=len(allocated_tiers),
@@ -154,12 +208,14 @@ def solve_ubba_greedy(
         duality_gap=float(marginal_cost),  # Upper bound on integrality gap is at most 1 item cost
         solver_latency_ms=latency_ms,
         is_feasible=(cum_weight >= target_coverage),
+        tier_biases=tier_biases,
     )
 
 
 def solve_naive_greedy_coverage(
     blocks: List[KVBlockCandidate],
     target_coverage: float,
+    s_scale: float = 1.85,
 ) -> UBBAResult:
     """
     Unconstrained Naïve Greedy Coverage Solver (The flawed formulation rejected by Panel):
@@ -172,6 +228,7 @@ def solve_naive_greedy_coverage(
     """
     t_start = time.perf_counter()
 
+    block_map = {blk.block_id: blk for blk in blocks}
     items: List[Tuple[float, int, str, str, float, float]] = []
     for blk in blocks:
         if not blk.tier_profiles:
@@ -186,12 +243,16 @@ def solve_naive_greedy_coverage(
     items.sort(key=lambda x: x[0], reverse=True)
 
     allocations: Dict[str, str] = {}
+    tier_biases: Dict[str, float] = {}
     total_bytes = 0
     cum_weight = 0.0
     rhos: List[float] = []
 
     for eff, cost, b_id, tier, rho, weight in items:
         allocations[b_id] = tier
+        tp = block_map[b_id].tier_profiles[tier]
+        tier_biases[b_id] = tp.get_tier_bias(s=s_scale)
+
         total_bytes += cost
         cum_weight += weight
         rhos.append(rho)
@@ -215,6 +276,7 @@ def solve_naive_greedy_coverage(
         duality_gap=0.0,
         solver_latency_ms=latency_ms,
         is_feasible=(cum_weight >= target_coverage),
+        tier_biases=tier_biases,
     )
 
 
@@ -224,6 +286,8 @@ def solve_ubba_lagrangian_dual(
     rho_floor: float = 0.10,
     max_iter: int = 30,
     tol: float = 1e-4,
+    enforce_fidelity_cliff: bool = True,
+    s_scale: float = 1.85,
 ) -> Tuple[UBBAResult, float]:
     """
     Solves UBBA using Lagrangian Dual Bisection:
@@ -240,12 +304,16 @@ def solve_ubba_lagrangian_dual(
     Since sum w_i x_i(lambda) is monotonically non-decreasing in lambda,
     we can find optimal lambda* via 1D bisection.
     """
+    effective_rho_floor = (
+        min(rho_floor, LADDER_FIDELITY_CLIFF) if enforce_fidelity_cliff else rho_floor
+    )
+
     # Filter admissible blocks and extract C_i*, w_i
     admissible: List[Tuple[str, str, int, float, float]] = []
     for blk in blocks:
         valid_tiers = [
             tp for tp in blk.tier_profiles.values()
-            if tp.distortion_rho <= rho_floor
+            if tp.distortion_rho <= effective_rho_floor
         ]
         if not valid_tiers:
             continue
@@ -260,7 +328,13 @@ def solve_ubba_lagrangian_dual(
 
     if not admissible:
         # Infeasible
-        empty_res = solve_ubba_greedy(blocks, target_coverage, rho_floor)
+        empty_res = solve_ubba_greedy(
+            blocks,
+            target_coverage,
+            effective_rho_floor,
+            enforce_fidelity_cliff=enforce_fidelity_cliff,
+            s_scale=s_scale,
+        )
         return empty_res, 0.0
 
     costs = np.array([item[2] for item in admissible], dtype=np.float64)
@@ -284,5 +358,11 @@ def solve_ubba_lagrangian_dual(
             lambda_low = mid
 
     # Primal result from greedy benchmark
-    greedy_res = solve_ubba_greedy(blocks, target_coverage, rho_floor)
+    greedy_res = solve_ubba_greedy(
+        blocks,
+        target_coverage,
+        effective_rho_floor,
+        enforce_fidelity_cliff=enforce_fidelity_cliff,
+        s_scale=s_scale,
+    )
     return greedy_res, best_lambda

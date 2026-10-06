@@ -113,6 +113,7 @@ class CanonicalAtomStore:
         # Physical page allocation pool (simulating GPU HBM PagedAttention physical pool)
         self.physical_k_pool: List[np.ndarray] = []
         self.physical_v_pool: List[np.ndarray] = []
+        self.page_to_block_id: Dict[int, str] = {}
 
     def _hash_tokens(self, tokens: List[int]) -> str:
         """Legacy flat hash (only hashes token array). Note: Causally unsafe without prefix!"""
@@ -125,7 +126,8 @@ class CanonicalAtomStore:
         tokens: List[int],
         k_unrotated: np.ndarray,
         v: np.ndarray,
-        orig_pos_start: int
+        orig_pos_start: int,
+        tier: str = "FP8"
     ) -> str:
         """Legacy registration via flat hash (backward compatible with Phase 0 tests)."""
         content_hash = self._hash_tokens(tokens)
@@ -142,12 +144,14 @@ class CanonicalAtomStore:
             k_unrotated=k_unrotated,
             v=v,
             orig_pos_start=orig_pos_start,
+            tier=tier,
             physical_page_id=page_id
         )
         self.blocks[block_id] = block
         self.content_index[content_hash] = block_id
         self.physical_k_pool.append(block.k_canonical)
         self.physical_v_pool.append(block.v)
+        self.page_to_block_id[page_id] = block_id
         return block_id
 
     def register_prefix_block(
@@ -156,7 +160,8 @@ class CanonicalAtomStore:
         k_unrotated: np.ndarray,
         v: np.ndarray,
         orig_pos_start: int,
-        parent_hash: Optional[str] = None
+        parent_hash: Optional[str] = None,
+        tier: str = "FP8"
     ) -> Tuple[str, str]:
         """Causal prefix hash chain registration.
         Returns: (block_id, current_prefix_hash).
@@ -180,12 +185,14 @@ class CanonicalAtomStore:
             orig_pos_start=orig_pos_start,
             prefix_hash=curr_hash,
             parent_hash=parent_hash,
+            tier=tier,
             physical_page_id=page_id
         )
         self.blocks[block_id] = block
         self.prefix_chain_index[curr_hash] = block_id
         self.physical_k_pool.append(block.k_canonical)
         self.physical_v_pool.append(block.v)
+        self.page_to_block_id[page_id] = block_id
         return block_id, curr_hash
 
     def compute_attention(
@@ -211,8 +218,11 @@ class CanonicalAtomStore:
                 q_remapped = apply_rope(q_raw, pos=query_logical_pos - key_pos)
                 score = np.dot(q_remapped, blk.k_unrotated[i]) / np.sqrt(self.head_dim)
                 
-                if tier_biases and blk.tier in tier_biases:
-                    score += tier_biases[blk.tier]
+                if tier_biases:
+                    if blk.tier in tier_biases:
+                        score += tier_biases[blk.tier]
+                    elif b_id in tier_biases:
+                        score += tier_biases[b_id]
                 scores_block[i] = score
 
             all_scores.append(scores_block)
@@ -245,6 +255,9 @@ class CanonicalAtomStore:
         - The Page Table provides logical-to-physical address translation.
         - Mathematical Equivalence:
             (R_m q)^T (R_n k) == q^T R_{m-n} k == CASA Q-remap == Ground Truth Attention.
+        - Dynamic Tier-Bias Softmax:
+            Applies tier_biases (from UBBA dynamic budget allocation, supporting either
+            tier-level or block_id-level maps) per physical page.
         """
         q_rot = apply_rope(q_raw, pos=query_logical_pos)
         all_scores = []
@@ -257,6 +270,12 @@ class CanonicalAtomStore:
             # Pure Tensor Core GEMM matrix-vector multiplication tile
             # (block_size, head_dim) . (head_dim,) -> (block_size,)
             scores_tile = np.dot(k_page, q_rot) / np.sqrt(self.head_dim)
+            if tier_biases and page_idx in self.page_to_block_id:
+                blk = self.blocks[self.page_to_block_id[page_idx]]
+                if blk.tier in tier_biases:
+                    scores_tile = scores_tile + tier_biases[blk.tier]
+                elif blk.block_id in tier_biases:
+                    scores_tile = scores_tile + tier_biases[blk.block_id]
             all_scores.append(scores_tile)
             all_values.append(v_page)
 

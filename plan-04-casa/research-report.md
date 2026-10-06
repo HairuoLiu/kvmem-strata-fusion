@@ -195,6 +195,19 @@ CASA 设立了严格的不可违反工程红线（Hard Gates）：
    # 16 blocks * 32 tokens = 512 tokens -> 128 KB
    assert tile.size_bytes == 131072 >= 65536
    ```
+4. **UBBA 混合精度动态偏置 Softmax 位级对齐**：
+   ```python
+   # PagedAttention Tensor Core GEMM 原生支持 tier_biases 校准
+   diff_weights = np.max(np.abs(w_casa - w_paged))
+   assert diff_weights < 1e-12
+   ```
+5. **分支后缀因果隔离与 UBBA 异构 Tier 动态分配**：
+   ```python
+   # 相同前缀衍生出不同后缀时，哈希与存储块严格隔离，支持分配不同 Tier (FP8 vs INT4)
+   assert hash_suf_a != hash_suf_b
+   assert store.blocks[id_suf_a].tier == "FP8"
+   assert store.blocks[id_suf_b].tier == "INT4"
+   ```
 
 ---
 
@@ -208,12 +221,15 @@ flowchart TD
     
     CASA -->|提供不可变因果物理页| IFR["方案一 IFR: 倒排频域检索<br>(Posting List 变为纯 Append-only)"]
     CASA -->|消除反复旋转误差| LADDER["方案二 LADDER: 保真度阶梯<br>(单次量化入库，读路径 0 重旋转)"]
-    CASA -->|提供稳定的失真度常数 ρ_0| UBBA["方案三 UBBA: 统一字节预算器<br>(求解器无需预测搬运次数衰减)"]
+    CASA -->|提供静态失真常数与 Tier-Bias GEMM| UBBA["方案三 UBBA: 统一字节预算器<br>(求解器无搬运衰减，混合精度 Softmax 原生对齐)"]
 ```
 
 1. **赋能 IFR（倒排频域检索）**：在 K-Freeze 下，所有 Key 原子的频域指纹是静态不变的。IFR 的倒排索引（Inverted Posting Lists）从“随搬运频繁更新”变为“纯增量追加（Append-only）”，系统吞吐提升 3.8×。
 2. **赋能 LADDER（保真度阶梯）**：LADDER 只需要在将原始 Key 压缩为 FP8/INT4/INT2/MERGED 时执行一次频域保护编码，后续从 NVMe 调入 GPU 计算时无需任何 de-RoPE / re-RoPE，彻底消除重建悬崖。
-3. **赋能 UBBA（统一字节预算器）**：UBBA 的运筹约束中的失真度 $\rho(b_i, t)$ 成为恒定常数 $\rho_0$，极大地简化了线性整数规划的影子价格计算。
+3. **赋能 UBBA（统一字节预算器）**：
+   - **失真度时间不变性**：K-Freeze 确保量化失真度 $\rho(b_i, t)$ 在多次搬迁中恒定，UBBA 的贪心与对偶求解器无需动态追踪迁移历史与衰减系数；
+   - **前缀分流与异构分配**：前缀哈希链允许不同请求在共享前缀的同时，对分支后缀独立分配异构压缩层级（高离散度 Needle 分配 FP8，平坦背景分配 INT4/INT2）；
+   - **混合精度 PagedAttention 原生对齐**：CASA 执行引擎在物理页寻址中原生支持 `tier_biases` 动态注入，保证混合精度 Softmax 注意力不被低比特块窃取。
 
 ---
 

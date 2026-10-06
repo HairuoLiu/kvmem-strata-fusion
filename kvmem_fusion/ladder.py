@@ -14,20 +14,20 @@ from typing import Dict, List, Optional, Tuple, Union
 import numpy as np
 
 
-def apply_rope(x: np.ndarray, pos: Union[int, np.ndarray], base: float = 10000.0) -> np.ndarray:
-    """Standard 2D Rotary Position Embedding (RoPE) for (..., dim) vectors."""
+def apply_rope(x: np.ndarray, pos: Union[int, float, np.ndarray], base: float = 10000.0) -> np.ndarray:
+    """Standard 2D Rotary Position Embedding (RoPE) for (..., dim) vectors.
+    Supports scalar, 1D, and multi-dimensional pos arrays matching x's leading shapes.
+    """
     dim = x.shape[-1]
     assert dim % 2 == 0, f"Head dim must be even, got {dim}"
     idx = np.arange(0, dim // 2)
     inv_freq = base ** (-2.0 * idx / dim)
 
-    # Support vectorized or scalar pos
-    if isinstance(pos, np.ndarray):
-        theta = np.outer(pos, inv_freq)  # [N, dim//2]
-        while theta.ndim < x.ndim:
-            theta = np.expand_dims(theta, axis=-2)
+    pos_arr = np.asarray(pos)
+    if pos_arr.ndim == 0:
+        theta = float(pos_arr) * inv_freq
     else:
-        theta = pos * inv_freq
+        theta = np.expand_dims(pos_arr, axis=-1) * inv_freq
 
     x_even = x[..., 0::2]
     x_odd = x[..., 1::2]
@@ -40,9 +40,9 @@ def apply_rope(x: np.ndarray, pos: Union[int, np.ndarray], base: float = 10000.0
     return out
 
 
-def derope(x: np.ndarray, pos: Union[int, np.ndarray], base: float = 10000.0) -> np.ndarray:
+def derope(x: np.ndarray, pos: Union[int, float, np.ndarray], base: float = 10000.0) -> np.ndarray:
     """Apply inverse RoPE rotation to map vectors back to unrotated semantic space."""
-    return apply_rope(x, pos=-pos, base=base)
+    return apply_rope(x, pos=-np.asarray(pos), base=base)
 
 
 @dataclass
@@ -69,6 +69,13 @@ LADDER_TIERS: Dict[str, LadderTierConfig] = {
     "INT2": LadderTierConfig(name="INT2", bits=2.0, rho=0.343, description="L2 KIVI-style 2-bit asymmetric"),
     "MERGED": LadderTierConfig(name="MERGED", bits=1.0, rho=0.420, description="L2' Quad-Merge G=4 Centroid 4-bit"),
 }
+
+
+def get_tier_biases(s: float = 1.85) -> Dict[str, float]:
+    """Return dictionary of softmax tier-biases for all registered LADDER tiers:
+    b_t = -sigma_t^2 / 2 = -(rho_t * s)^2 / 2.
+    """
+    return {name: cfg.get_tier_bias(s=s) for name, cfg in LADDER_TIERS.items()}
 
 
 def quantize_simulate(k: np.ndarray, tier_name: str, seed: Optional[int] = None) -> Tuple[np.ndarray, np.ndarray]:
@@ -119,6 +126,38 @@ def mixed_tier_softmax(
     return exp_l / np.sum(exp_l)
 
 
+def mixed_tier_lse(
+    logits: np.ndarray,
+    tier_names: List[str],
+    apply_correction: bool = True,
+    s: float = 1.85
+) -> Tuple[float, float]:
+    """Compute numerically stable Log-Sum-Exp (LSE) and partition sum Z over mixed fidelity tiers.
+
+    Args:
+        logits: [N] array of attention or retrieval logits
+        tier_names: List of tier strings of length N
+        apply_correction: If True, injects b_t = -sigma_t^2 / 2 per tier
+        s: logit scale factor (default 1.85)
+    Returns:
+        (lse, Z): tuple of float scalar LSE = ln(Z) and partition function Z = sum exp(corrected_logits)
+    """
+    assert len(logits) == len(tier_names)
+    corrected_logits = logits.copy()
+
+    if apply_correction:
+        for idx, t_name in enumerate(tier_names):
+            if t_name in LADDER_TIERS:
+                b_t = LADDER_TIERS[t_name].get_tier_bias(s)
+                corrected_logits[idx] += b_t
+
+    max_l = float(np.max(corrected_logits))
+    sum_exp = float(np.sum(np.exp(corrected_logits - max_l)))
+    lse = max_l + float(np.log(sum_exp))
+    z = float(np.exp(lse))
+    return lse, z
+
+
 @dataclass
 class QuadMergeResult:
     centroids_unrotated: np.ndarray     # [32, dim] Centroids in unrotated space
@@ -128,6 +167,11 @@ class QuadMergeResult:
     reconstructed_keys: np.ndarray      # [4, 32, dim] Reconstructed RoPE keys
     reconstruction_err: float           # Relative Frobenius reconstruction error
     hkvd_scores: np.ndarray             # [4, 32] Residual norm priority scores
+
+    @property
+    def fits_int8(self) -> bool:
+        """Check whether position deltas fit inside signed 8-bit integer [-128, 127]."""
+        return bool(np.all(self.pos_deltas >= -128) and np.all(self.pos_deltas <= 127))
 
 
 def quad_merge_blocks(
@@ -147,11 +191,8 @@ def quad_merge_blocks(
     G, B, dim = blocks_k.shape
     assert G == 4, f"Quad-merge expects G=4 blocks, got {G}"
 
-    # Step 1: De-RoPE all keys back to unrotated semantic space
-    unrotated_k = np.zeros_like(blocks_k)
-    for g in range(G):
-        for b in range(B):
-            unrotated_k[g, b] = derope(blocks_k[g, b], pos=block_positions[g, b], base=base)
+    # Step 1: De-RoPE all keys back to unrotated semantic space (vectorized)
+    unrotated_k = derope(blocks_k, pos=block_positions, base=base)
 
     # Step 2: Centroid in unrotated space
     centroids_unrotated = np.mean(unrotated_k, axis=0)  # [32, dim]
@@ -160,14 +201,10 @@ def quad_merge_blocks(
     canonical_positions = np.round(np.mean(block_positions, axis=0)).astype(int)  # [32]
 
     # Step 4: Position deltas delta_{g, b} = pos_{g, b} - canonical_pos_{b}
-    pos_deltas = np.zeros((G, B), dtype=int)
-    for g in range(G):
-        pos_deltas[g] = block_positions[g] - canonical_positions
+    pos_deltas = block_positions - canonical_positions
 
     # Step 5: Content residuals in unrotated space
-    residuals_unrotated = np.zeros_like(unrotated_k)
-    for g in range(G):
-        residuals_unrotated[g] = unrotated_k[g] - centroids_unrotated
+    residuals_unrotated = unrotated_k - centroids_unrotated
 
     # Optional Low-rank SVD compression on residuals across the 4 blocks
     approx_residuals = residuals_unrotated.copy()
@@ -178,14 +215,9 @@ def quad_merge_blocks(
         flat_approx = np.dot(U[:, :rank_r] * S[:rank_r], Vt[:rank_r, :])
         approx_residuals = flat_approx.reshape(G, B, dim)
 
-    # Step 6: Reconstruction into RoPE space
-    reconstructed_keys = np.zeros_like(blocks_k)
-    for g in range(G):
-        for b in range(B):
-            # Reconstruct unrotated key: centroid + residual
-            k_unrot_recon = centroids_unrotated[b] + approx_residuals[g, b]
-            # Re-RoPE back to token's original logical position
-            reconstructed_keys[g, b] = apply_rope(k_unrot_recon, pos=block_positions[g, b], base=base)
+    # Step 6: Reconstruction into RoPE space (vectorized)
+    k_unrot_recon = centroids_unrotated + approx_residuals
+    reconstructed_keys = apply_rope(k_unrot_recon, pos=block_positions, base=base)
 
     # Calculate Frobenius relative error
     frob_norm_orig = np.linalg.norm(blocks_k)

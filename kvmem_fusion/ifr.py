@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple, Set
 import numpy as np
 
+from kvmem_fusion.core import compute_prefix_hash
+
 
 def compute_deroped_mean(keys: np.ndarray) -> Tuple[np.ndarray, float, float]:
     """
@@ -38,10 +40,14 @@ class IFRBlock:
     dispersion: float = 0.0  # max_i ||k_i - mean_k|| (dev_meta)
     avg_dispersion: float = 0.0
     doublet_centroids: Optional[List[np.ndarray]] = None
+    prefix_hash: Optional[str] = None
+    parent_hash: Optional[str] = None
 
     def __post_init__(self):
         if len(self.mean_k) == 0:
             self.mean_k, self.dispersion, self.avg_dispersion = compute_deroped_mean(self.keys)
+        if self.prefix_hash is None:
+            self.prefix_hash = compute_prefix_hash(self.tokens, parent_hash=self.parent_hash)
 
 
 class LSECacheTracker:
@@ -127,7 +133,12 @@ class AntiCollapseSplitter:
         """
         Check intra-block dispersion against threshold theta.
         Returns (is_split, [sub_centroids]).
+        Doublet splitting is strictly an index-space virtual representation expansion
+        and does NOT mutate or divide the underlying 32-token immutable atom storage.
         """
+        if block.doublet_centroids is not None:
+            return True, block.doublet_centroids
+
         if block.dispersion <= self.dispersion_threshold:
             return False, [block.mean_k]
 
@@ -204,7 +215,17 @@ class IVFMeanKIndex:
         dots = np.dot(mean_keys, self.centroids.T)
         assignments = np.argmax(dots, axis=-1)
         for b_idx, c_idx in enumerate(assignments):
-            self.postings[c_idx].append(blocks[b_idx].block_id)
+            blk = blocks[b_idx]
+            self.postings[c_idx].append(blk.block_id)
+            # Dual-posting for doublet centroids:
+            # If intra-block dispersion exceeds threshold, also map needle centroid
+            # to its nearest Voronoi cluster so needle queries are routed at coarse probe.
+            is_split, doublets = self.anti_collapse.inspect_and_split(blk)
+            if is_split:
+                for sc in doublets:
+                    sc_c_idx = int(np.argmax(np.dot(self.centroids, sc)))
+                    if blk.block_id not in self.postings[sc_c_idx]:
+                        self.postings[sc_c_idx].append(blk.block_id)
 
         self.is_trained = True
 
@@ -255,10 +276,19 @@ class IFRRetriever:
         self.blocks: Dict[str, IFRBlock] = {}
         self.content_hashes: Dict[str, str] = {}
 
-    def add_block(self, block: IFRBlock) -> str:
-        """L0 Identity Deduplication: registers block or references existing."""
-        token_hash = hash(tuple(block.tokens))
-        h_str = str(token_hash)
+    def add_block(self, block: IFRBlock, parent_hash: Optional[str] = None) -> str:
+        """
+        L0 Identity Deduplication: registers block or references existing.
+        Strictly obeys CASA prefix-chained immutable atom invariants via SHA-256 Merkle chain:
+        PrefixHash_i = SHA256(PrefixHash_{i-1} || Tokens_i || ModelID).
+        """
+        if parent_hash is not None and block.parent_hash != parent_hash:
+            block.parent_hash = parent_hash
+            block.prefix_hash = compute_prefix_hash(block.tokens, parent_hash=parent_hash)
+        elif block.prefix_hash is None:
+            block.prefix_hash = compute_prefix_hash(block.tokens, parent_hash=block.parent_hash)
+
+        h_str = block.prefix_hash
         if h_str in self.content_hashes:
             return self.content_hashes[h_str]
 
