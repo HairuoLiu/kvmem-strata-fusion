@@ -50,6 +50,8 @@
 | `plan-02-ladder/` | ✅ 教授级研究报告已完成；设计文档 + 可执行 prompt 待生成 |
 | `plan-03-ubba/` | 🚧 研究报告待生成（受 API 频率限制阻塞，预计 2026-10-06 后补）；本目录 README 含方案简介 |
 | `plan-04-casa/` | 🚧 研究报告待生成（同上）；本目录 README 含方案简介 |
+| `benchmarks/` | ✅ **Track A 端到端长上下文评测 harness (`eval_end_to_end.py`)**，支持 8K–32K NIAH 评测 |
+| `docs/track_a_benchmark_report.md` | ✅ **Track A 实测基准报告**：CASA+IFR+UBBA+LADDER 达到 100% 召回、7.7x 压缩、0.0000 PPL 漂移 |
 | `prompts/` | 🚧 可执行 AI prompt（每方案一份 + 共享 eval prompt）待生成 |
 | `docs/` | 🚧 统一评测 backbone 规范 + 实验执行手册待整理 |
 | 完整主报告 | `kvmem-strata-融合研究方案.md`（10 研究员摘要 + 圆桌 + 四方案 + 矩阵 + Gate），位于本仓库外的工作区根目录，后续会并入 `docs/` |
