@@ -1,33 +1,31 @@
 # Track A: Real Model Evaluation & Needle-in-a-Haystack Benchmark Report
 
-> **Lead Researcher**: Track A Architecture Team  
-> **Status**: Verified & Reproducible (70/70 PyTest suite passing)  
-> **Target Contexts**: 8,192 (8K), 16,384 (16K), and 32,768 (32K) tokens  
-> **Depths Evaluated**: 10%, 25%, 50%, 75%, 90%
+> **Lead Researcher**: Track A Architecture Team (Calibrated via External Review Audit)  
+> **Status**: **Synthetic Self-Consistency Validation（合成自洽验证）**  
+> **Hardware Environment**: Apple Silicon / CPU Host (PyTest 73/73 passing)  
+> **Hardware Gates**: G-CAS-1 (I/O DMA) & G-CAS-2 (Kernel GEMM) marked as `UNMEASURED (Design Intent)`  
+> **Target Contexts Evaluated**: 8,192 (8K) to 32,768 (32K) tokens, with 1M tokens scale extrapolation  
 
 ---
 
-## 1. Executive Summary
+## 1. Executive Summary & Calibration Notice
 
-This report documents the end-to-end evaluation harness connecting the four core pillars of the **KVMem-Strata-Fusion** architecture:
-1. **CASA (Canonical Atom Store Architecture)**: Content-addressed immutable K-freeze storage, Prefix Hash Chain causal deduplication, and PagedAttention Tensor Core GEMM.
-2. **IFR (Invertible Fidelity-bound Retrieval)**: Anti-collapse dispersion tracking ($\text{dev}_{\text{meta}} > 0.85$), doublet centroid splitting ($[k_{\text{needle}}, k_{\text{residual}}]$), IVF-over-Mean-K inverted indexing, and unnormalized LSE caching.
-3. **UBBA (Universal Byte-Budget Allocator)**: Dynamic Demand-Covering Knapsack budget allocator enforcing hard fidelity cliff gating ($\rho \le 0.365$).
-4. **LADDER (In-KV Fidelity Ladder)**: De-RoPE manifold phase preservation, multi-tier mixed-precision quantization (FP8, INT4, INT2, MERGED), and Softmax tier-bias correction ($b_t = -\sigma_t^2 / 2$).
+Following external peer critique (`docs/external_review_critique.md`), this report explicitly distinguishes between:
+1. **Mathematical Self-Consistency (Verified)**: Proves that the fused algorithm pipeline (CASA $\to$ IFR $\to$ UBBA $\to$ LADDER) is internally self-consistent, numerical errors in de-RoPE / PagedAttention are below machine epsilon ($< 10^{-12}$), and tier-bias cancels Jensen's inequality drift under synthetic Gaussian assumptions.
+2. **Empirical LLM Limitations (Calibrated)**:
+   - Values of $\Delta\text{PPL} = 0.0000$ and $\text{Cosine} = 1.0000$ were mathematically constructed properties of the synthetic test harness (where target logits were calibrated to dominate attention mass). Real next-token prediction perplexity on natural text requires P0 model weights (e.g. Qwen2.5 / GPT-2).
+   - Problem scale at 32K token context represents a ~10% selection rate (103 / 1,024 blocks), whereas 10M tokens represents a 0.033% selection rate (300× harder).
+   - Hardware bandwidths $\ge 45\text{ GB/s}$ are design targets, unmeasured on CPU/Mac dev environments.
 
-### Core Benchmark Findings
+### Core Benchmark Summary (Synthetic Calibration)
 
-| System / Method | Needle Recall | Needle Rank | Context Cosine Sim | Avg PPL Drift ($\Delta\text{PPL}$) | Compression Ratio | Hierarchical Footprint (32K) | U-E-F-C Gate |
+| System / Method | Needle Recall | Needle Rank | Context CosSim | Avg PPL Drift ($\Delta\text{PPL}$) | Compression Ratio | Hierarchical Footprint (32K) | U-E-F-C Gate |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Full-Context (FP8 Baseline)** | **100.0%** | **1.0** | **1.0000** | **0.0000** | **1.0x** | 1024.0 KB | PASS |
+| **Full-Context (FP8 Baseline)** | **100.0%** | **1.0** | **1.0000** | **0.0000** | **1.0x** | 1024.0 KB | REFERENCE |
 | **Naive Flat Compression (INT2)** | **0.0%** | **> 999999** | **0.0639** | **+922.07** | **4.0x** | 256.0 KB | **FAIL** |
-| **KVMem-Strata-Fusion** | **100.0%** | **1.0** | **1.0000** | **0.0000** | **7.7x** | **130.4 KB** | **PASS** |
+| **KVMem-Strata-Fusion (Pipeline)** | **100.0%** | **1.0** | **1.0000\*** | **0.0000\*** | **7.7x** | **130.4 KB** | **PASS (Synthetic)** |
 
-### Key Takeaways
-1. **100% Needle Recall Preserved**: KVMem-Strata-Fusion recovers the buried needle at Rank 1 across all tested depths (10%, 25%, 50%, 75%, 90%) and all context lengths up to 32K tokens.
-2. **7.7x Workspace Byte Reduction**: Hierarchical footprint drops from 1024 KB to 130.4 KB for 32K context windows, easily achieving the target ~4x-8x compression ratio without semantic loss.
-3. **Zero Perplexity Drift**: $\Delta\text{PPL} = 0.0000$ and Cosine Similarity $= 1.0000$, validating that LADDER tier-bias correction neutralizes Jensen's inequality attention theft.
-4. **Falsification of Naive Compression**: Naive flat compression fails catastrophically with 0.0% recall and catastrophic PPL drift (+922.07) due to 1/32 Mean-K dilution and Jensen's logit inflation.
+*\*Note: 1.0000 CosSim / 0.0000 PPL Drift reflects synthetic self-consistency under target-logit alignment; see §4 for realistic SNR sweep.*
 
 ---
 
@@ -47,100 +45,70 @@ Naive KV compression schemes exhibit two fatal failure modes:
    $$\mathbb{E}[\exp(s + \epsilon)] = \exp(s) \exp\left(\frac{\sigma^2}{2}\right)$$
    For INT2 ($\rho = 0.343$, $\sigma \approx 0.635$), background tokens receive an artificial $+22\%$ logit boost, stealing attention mass and corrupting next-token predictions.
 
-### 2.3 The Fused Pipeline: CASA + IFR + UBBA + LADDER
-```
-[ Input Request / Prefix Chain ]
-              │
-              ▼
-    ┌───────────────────┐
-    │ CASA Atom Store   │ ── Immutable K-Freeze & Prefix Hash Chain Deduplication
-    └───────────────────┘
-              │
-              ▼
-    ┌───────────────────┐
-    │ IFR Two-Tier      │ ── Anti-Collapse Splitter: dev_meta > 0.85 -> Doublet Centroid
-    │ Retrieval Engine  │    IVF-over-Mean-K probe + Unnormalized LSE argmax selection
-    └───────────────────┘
-              │
-              ▼
-    ┌───────────────────┐
-    │ UBBA Dynamic      │ ── Minimum-Cost Knapsack Allocator (rho <= 0.365)
-    │ Budget Allocator  │    Needle Block: FP8 (1024B) | Active: INT2 (256B) | Disk: MERGED (128B)
-    └───────────────────┘
-              │
-              ▼
-    ┌───────────────────┐
-    │ LADDER Calibration│ ── de-RoPE manifold quantization + Tier-Bias Injection:
-    │ Engine            │    b_t = -sigma_t^2 / 2
-    └───────────────────┘
-              │
-              ▼
-    ┌───────────────────┐
-    │ CASA Paged GEMM   │ ── Tensor Core batched GEMM tiles across Physical Page Table
-    │ Execution         │    Big-Tile Coalescing (128KB+) for GPUDirect Storage DMA
-    └───────────────────┘
-```
-
 ---
 
-## 3. Detailed Benchmark Results
+## 3. Detailed Benchmark Results (Context Sweep 8K - 32K)
 
-### 3.1 Context Window Sweep (8K - 32K Tokens)
-
-| Context | Depth | Full-Context Recall | Naive Recall | Fusion Recall | Full Footprint | Naive Footprint | Fusion Footprint | Fusion Ratio | $\Delta\text{PPL}$ |
+| Context | Depth | Full-Context Recall | Naive Recall | Fusion Recall | Full Footprint | Naive Footprint | Fusion Footprint | Fusion Ratio | $\Delta\text{PPL}$ (Synth) |
 | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
 | **8,192** | 10% | 100.0% | 0.0% | **100.0%** | 256.0 KB | 64.0 KB | **34.2 KB** | **7.5x** | **0.0000** |
-| 8,192 | 25% | 100.0% | 0.0% | **100.0%** | 256.0 KB | 64.0 KB | **34.4 KB** | **7.4x** | **0.0000** |
 | 8,192 | 50% | 100.0% | 0.0% | **100.0%** | 256.0 KB | 64.0 KB | **34.4 KB** | **7.4x** | **0.0000** |
-| 8,192 | 75% | 100.0% | 0.0% | **100.0%** | 256.0 KB | 64.0 KB | **34.4 KB** | **7.4x** | **0.0000** |
 | 8,192 | 90% | 100.0% | 0.0% | **100.0%** | 256.0 KB | 64.0 KB | **34.4 KB** | **7.4x** | **0.0000** |
 | **16,384** | 10% | 100.0% | 0.0% | **100.0%** | 512.0 KB | 128.0 KB | **66.2 KB** | **7.7x** | **0.0000** |
-| 16,384 | 25% | 100.0% | 0.0% | **100.0%** | 512.0 KB | 128.0 KB | **66.4 KB** | **7.7x** | **0.0000** |
 | 16,384 | 50% | 100.0% | 0.0% | **100.0%** | 512.0 KB | 128.0 KB | **66.4 KB** | **7.7x** | **0.0000** |
-| 16,384 | 75% | 100.0% | 0.0% | **100.0%** | 512.0 KB | 128.0 KB | **66.4 KB** | **7.7x** | **0.0000** |
 | 16,384 | 90% | 100.0% | 0.0% | **100.0%** | 512.0 KB | 128.0 KB | **66.4 KB** | **7.7x** | **0.0000** |
 | **32,768** | 10% | 100.0% | 0.0% | **100.0%** | 1024.0 KB | 256.0 KB | **130.2 KB** | **7.9x** | **0.0000** |
-| 32,768 | 25% | 100.0% | 0.0% | **100.0%** | 1024.0 KB | 256.0 KB | **130.4 KB** | **7.9x** | **0.0000** |
 | 32,768 | 50% | 100.0% | 0.0% | **100.0%** | 1024.0 KB | 256.0 KB | **130.4 KB** | **7.9x** | **0.0000** |
-| 32,768 | 75% | 100.0% | 0.0% | **100.0%** | 1024.0 KB | 256.0 KB | **130.4 KB** | **7.9x** | **0.0000** |
 | 32,768 | 90% | 100.0% | 0.0% | **100.0%** | 1024.0 KB | 256.0 KB | **130.4 KB** | **7.9x** | **0.0000** |
 
 ---
 
-## 4. U-E-F-C Statistical Evaluation Gate Verification
+## 4. Empirical Audits Addressing External Critique
 
-The pipeline was continuously evaluated against the 10-expert statistical contract:
+### 4.1 SNR Sensitivity & Failure Mode Analysis (`benchmarks/eval_snr_sensitivity.py`)
+To prevent circular logic (detecting artificially high dispersion), we swept the Signal-to-Noise Ratio $\|k_{\text{needle}}\| / \|k_{\text{bg}}\|$ from 1.0 (unseparable) to 5.0:
 
-| Gate Dimension | Metric & Criteria | Achieved Score | Gate Status |
-| :--- | :--- | :---: | :---: |
-| **Gate F (Fidelity)** | Top-1 Needle Agreement $\ge 97\%$ | **100.0%** | **PASSED** |
-| | Utility Gap $\le 1.0\,\text{pp}$ | **0.0 pp** | **PASSED** |
-| | Discarded Attention Mass $\rho \le \rho_{\max} (0.36)$ | **0.100** | **PASSED** |
-| **Gate E (Efficiency)** | Retrieval Latency $\le 350\,\text{ms}$ | **18.4 - 150.4 ms** | **PASSED** |
-| **Gate C (Cost)** | In-Memory Index Footprint $\le 4.0\,\text{GiB}$ | **0.005 GiB** | **PASSED** |
-| **Gate U (Utility)** | Paired Success Difference $\Delta \ge 0.0$ | **+1.00** | **PASSED** |
+| SNR Level | Needle Burst | Full-Context Recall | Standard KVMem Mean-K | Naive INT2 Recall | IFR Doublet Recall | Realistic CosSim |
+| :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **1.00** | 1.00 | 100.0% | **80.0%** | 100.0% | **100.0%** | 0.2830 |
+| **1.25** | 1.25 | 100.0% | **80.0%** | 100.0% | **100.0%** | 0.2817 |
+| **1.50** | 1.50 | 100.0% | 100.0% | 100.0% | 100.0% | 0.2804 |
+| **2.00** | 2.00 | 100.0% | 100.0% | 100.0% | 100.0% | 0.2776 |
+| **3.00** | 3.00 | 100.0% | 100.0% | 100.0% | 100.0% | 0.2645 |
+| **5.00** | 5.00 | 100.0% | 100.0% | 100.0% | 100.0% | 0.2662 |
+
+**Key Finding**:
+- Under low SNR (1.00 - 1.25), standard KVMem Mean-K suffers a **20% recall drop**, whereas IFR's doublet candidate generation maintains 100% recall.
+- Without artificial logit dominance, uncompressed-to-compressed cosine similarity across the full context is **~0.28**, accurately exposing the compression trade-off.
+
+### 4.2 False Alarm Rate on Background Blocks (Assumption A15)
+Testing pure background blocks against a fixed dispersion threshold ($\theta = 0.85$):
+- At $\sigma = 0.02$: False Alarm Rate = **0.00%** (p95 dispersion 0.199).
+- At $\sigma = 0.05$: False Alarm Rate = **0.00%** (p95 dispersion 0.497).
+- At $\sigma = 0.10$: False Alarm Rate = **99.85%** (p95 dispersion 0.994).
+- At $\sigma \ge 0.15$: False Alarm Rate = **100.00%** (p95 dispersion $\ge 1.49$).
+
+**Conclusion**: Fixed $\theta = 0.85$ is brittle under varied background noise. The production implementation must use **dynamic dispersion thresholds** ($\mu_{\text{block}} + 3\sigma_{\text{block}}$) to prevent false-alarm saturation.
+
+### 4.3 Scale & Selection-Rate Joint Scaling (`benchmarks/eval_scale_selection_rate.py`)
+Evaluating candidate pool expansion from 32K to 1M tokens with fixed $K=103$ block budget:
+
+| Context | Candidate Blocks ($N$) | Selection Rate ($103/N$) | Standard KVMem (Low SNR) | IFR Doublet (Low SNR) | Index RAM Footprint | Re-RoPE Status |
+| :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **32K** | 1,024 | 10.059% | 0.0% | **100.0%** | 0.4 MiB | Native ($\le 256\text{K}$) |
+| **64K** | 2,048 | 5.029% | 0.0% | **100.0%** | 0.8 MiB | Native ($\le 256\text{K}$) |
+| **128K** | 4,096 | 2.515% | 0.0% | **100.0%** | 1.5 MiB | Native ($\le 256\text{K}$) |
+| **256K** | 8,192 | 1.257% | 0.0% | **100.0%** | 3.0 MiB | Native ($\le 256\text{K}$) |
+| **512K** | 16,384 | 0.629% | 0.0% | **100.0%** | 6.0 MiB | Paged Table ($\gt 256\text{K}$) |
+| **1M** | 32,768 | **0.314%** | 0.0% | **100.0%** | 12.0 MiB | Paged Table ($\gt 256\text{K}$) |
 
 ---
 
-## 5. Verification & Reproducibility
+## 5. Architecture Governance: Subsystem Degradation
 
-### 5.1 Running the End-to-End Evaluation Harness
-```bash
-# Activate virtual environment
-source .venv/bin/activate
+We formally adopt the external review recommendation to replace **Plan-level Elimination** with **Subsystem Degradation**:
 
-# Execute fast 4K verification benchmark
-python3 benchmarks/eval_end_to_end.py --quick
-
-# Execute full 8K - 32K context window sweep across all depths
-python3 benchmarks/eval_end_to_end.py --lengths 8192 16384 32768 --depths 0.10 0.25 0.50 0.75 0.90
-```
-
-### 5.2 Automated PyTest Verification
-```bash
-# Run Track A benchmark verification tests
-pytest tests/test_end_to_end_benchmark.py -v
-
-# Run entire repository test suite (70 tests passing)
-pytest tests/ -v
-```
+1. **CASA PagedAttention Degradation**: If PagedAttention virtual table indexing encounters non-standard memory layouts, degrade gracefully to uncompressed local FIFO sliding window.
+2. **IFR Doublet Degradation**: If dispersion detection saturates (false-alarm $> 10\%$), degrade dynamically to single-centroid Mean-K clustering with enlarged $n_{\text{probe}}$.
+3. **UBBA Knapsack Degradation**: If Lagrangian knapsack solver fails SLA ($> 0.1\text{ ms}$), fallback to static 2-tier greedy allocation.
+4. **LADDER Tier Degradation**: If Quad-Merge introduces non-recoverable high-frequency degradation, freeze compression at Tier L2 (FP8/INT4 4.35×) without INT2 merge.
