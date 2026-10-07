@@ -7,7 +7,11 @@
 本仓库的**研究主干**（`docs/master-research-report.md` 与四个 `plan-*/research-report.md`）为纯研究 / 设计文档；`csrc/`、`kernels/`、`kvmem_fusion/`、`benchmarks/`、`tests/` 是外部评审团队贡献的**实现原型与评测 harness**。
 
 > ⚠️ **关于"实测"数字的重要提醒**：外部团队报告的 `100% 针尖召回 / PPL 漂移 0.0000 / G-CAS-1 PASS / U-E-F-C 全 PASS` 等结论，经我们逐条复核，存在**① 未跑真实模型（合成数据）、② 规模仅 8K–32K（低于问题域两个数量级）、③ 硬件 Gate 用断言冒充实测**三类问题，**目前不可作为结论采信**。
-> **完整质疑、证据行号与正确的验证方法见 [`docs/external_review_critique.md`](docs/external_review_critique.md) —— 请先读这一份。**
+> **第一轮质疑（含证据行号）：[`docs/external_review_critique.md`](docs/external_review_critique.md)**
+>
+> ✅ 外部团队已在 `273ae4b` 中**修好了报告诚信问题**（状态改为合成自洽验证、硬件 Gate 标 UNMEASURED、采纳子系统降级）。
+> ⚠️ 但第二轮复核（**[`docs/external_review_critique_v2.md`](docs/external_review_critique_v2.md)**）发现：新审计暴露了两个**机制有效性**问题——虚警率在 σ≥0.10 时达 99.85%（意味着 IFR 会按他们自己的规则退化为 KVMem 基线）、CosSim 0.28 因缺少 oracle-uncompressed 对照而不可解释。
+> **当前成熟度：T0（数学自洽），尚未达到 T1（真实模型保真）。**
 
 所有"预期""目标"均为未实测的假设，文中凡标注「未验证」之处均未经实验确认。融合的两大硬前提——KVMem 闭源引擎 **QW3 的可达性**、以及 **≤256K 区间不需要 re-RoPE**——是后续一切实验的 G0 杀点。请带着这个前提阅读，不要把它当作已验证结论。
 
@@ -59,7 +63,8 @@
 | `plan-02-ladder/` | ✅ 研究报告（LADDER：KV 内部保真阶梯，NVMe 8×↓） |
 | `plan-03-ubba/` | ✅ 研究报告（UBBA：统一字节预算器，约束集修正版） |
 | `plan-04-casa/` | ✅ 研究报告（CASA：规范原子存储架构，K-Freeze + 前缀哈希链） |
-| `docs/external_review_critique.md` | ✅ **【新增】对外部评审产出的技术质疑**：证据行号 + 正确验证方法 + 建议 |
+| `docs/external_review_critique.md` | ✅ 第一轮技术质疑：证据行号 + 正确验证方法 + 建议 |
+| `docs/external_review_critique_v2.md` | ✅ **【最新】第二轮复核（针对 273ae4b）**：机制有效性边界、必补对照清单、真实模型 P0 完整可执行协议、T0–T3 成熟度分级 |
 | `prompts/` | 🚧 可执行 AI prompt（每方案一份 + 共享 eval prompt）待生成 |
 | 各方案 `design-doc.md` | 🚧 设计文档（UML + milestone）待生成 |
 
@@ -68,6 +73,8 @@
 | 路径 | 内容 | 我们的验证判定 |
 |---|---|---|
 | `benchmarks/eval_end_to_end.py` | 8K–32K NIAH 评测 harness | ❌ 合成数据，无真实模型 |
+| `benchmarks/eval_snr_sensitivity.py` | SNR 1.0→5.0 扫描 + 虚警率 | ⚠️ 设计正确，但结论反噬机制：σ≥0.10 虚警 99.85%（见 v2 §2.1） |
+| `benchmarks/eval_scale_selection_rate.py` | 32K→1M 规模/选择率扫描 | ⚠️ docstring 声明 Random 基线但结果表无该列（见 v2 §2.3） |
 | `docs/track_a_benchmark_report.md` | Track A 基准报告 | ⚠️ 数字不可采信，见质疑文档 §2.1–2.2 |
 | `docs/comparative_study_report.md` | 四系统能力对比白皮书 | ⚠️ 含推导/专家意见冒充实测，见 §2.6 |
 | `csrc/` | C++20 UBBA 求解器、CASA 页表、benchmark | ✅ 求解器 69.75 µs 可信；但 "Effective Bandwidth" 是内存内带宽，非 I/O |
