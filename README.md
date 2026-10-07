@@ -4,7 +4,12 @@
 
 ## 诚实声明（先读这段）
 
-本报告是 **纯研究 / 设计文档，没有任何代码实现**。所有"预期""目标"均为未实测的假设，文中凡标注「未验证」之处均未经实验确认。融合的两大硬前提——KVMem 闭源引擎 **QW3 的可达性**、以及 **≤256K 区间不需要 re-RoPE**——是后续一切实验的 G0 杀点。请带着这个前提阅读，不要把它当作已验证结论。
+本仓库的**研究主干**（`docs/master-research-report.md` 与四个 `plan-*/research-report.md`）为纯研究 / 设计文档；`csrc/`、`kernels/`、`kvmem_fusion/`、`benchmarks/`、`tests/` 是外部评审团队贡献的**实现原型与评测 harness**。
+
+> ⚠️ **关于"实测"数字的重要提醒**：外部团队报告的 `100% 针尖召回 / PPL 漂移 0.0000 / G-CAS-1 PASS / U-E-F-C 全 PASS` 等结论，经我们逐条复核，存在**① 未跑真实模型（合成数据）、② 规模仅 8K–32K（低于问题域两个数量级）、③ 硬件 Gate 用断言冒充实测**三类问题，**目前不可作为结论采信**。
+> **完整质疑、证据行号与正确的验证方法见 [`docs/external_review_critique.md`](docs/external_review_critique.md) —— 请先读这一份。**
+
+所有"预期""目标"均为未实测的假设，文中凡标注「未验证」之处均未经实验确认。融合的两大硬前提——KVMem 闭源引擎 **QW3 的可达性**、以及 **≤256K 区间不需要 re-RoPE**——是后续一切实验的 G0 杀点。请带着这个前提阅读，不要把它当作已验证结论。
 
 ## 背景：两个系统与一个硬摩擦
 
@@ -44,17 +49,31 @@
 
 ## 本仓库当前内容（状态）
 
+### 研究文档
+
 | 路径 | 内容 / 状态 |
 |---|---|
-| `plan-01-ifr/` | ✅ 教授级研究报告已完成；设计文档 + 可执行 prompt 待生成 |
-| `plan-02-ladder/` | ✅ 教授级研究报告已完成；设计文档 + 可执行 prompt 待生成 |
-| `plan-03-ubba/` | 🚧 研究报告待生成（受 API 频率限制阻塞，预计 2026-10-06 后补）；本目录 README 含方案简介 |
-| `plan-04-casa/` | 🚧 研究报告待生成（同上）；本目录 README 含方案简介 |
-| `benchmarks/` | ✅ **Track A 端到端长上下文评测 harness (`eval_end_to_end.py`)**，支持 8K–32K NIAH 评测 |
-| `docs/track_a_benchmark_report.md` | ✅ **Track A 实测基准报告**：CASA+IFR+UBBA+LADDER 达到 100% 召回、7.7x 压缩、0.0000 PPL 漂移 |
+| `docs/master-research-report.md` | ✅ **完整主报告**（10 研究员摘要 + 圆桌 + 四方案 + 横向矩阵 + 退役 Gate），78 KB |
+| `docs/experiment-manual.md` | ✅ **实验执行手册**：设备需求、容量/预算数学、云端 GPU 价格、E0–E9 逐步实验 |
+| `plan-01-ifr/` | ✅ 研究报告（IFR：可证伪的块级 KV 检索，U-E-F-C 四维门） |
+| `plan-02-ladder/` | ✅ 研究报告（LADDER：KV 内部保真阶梯，NVMe 8×↓） |
+| `plan-03-ubba/` | ✅ 研究报告（UBBA：统一字节预算器，约束集修正版） |
+| `plan-04-casa/` | ✅ 研究报告（CASA：规范原子存储架构，K-Freeze + 前缀哈希链） |
+| `docs/external_review_critique.md` | ✅ **【新增】对外部评审产出的技术质疑**：证据行号 + 正确验证方法 + 建议 |
 | `prompts/` | 🚧 可执行 AI prompt（每方案一份 + 共享 eval prompt）待生成 |
-| `docs/` | 🚧 统一评测 backbone 规范 + 实验执行手册待整理 |
-| 完整主报告 | `kvmem-strata-融合研究方案.md`（10 研究员摘要 + 圆桌 + 四方案 + 矩阵 + Gate），位于本仓库外的工作区根目录，后续会并入 `docs/` |
+| 各方案 `design-doc.md` | 🚧 设计文档（UML + milestone）待生成 |
+
+### 实现与评测（外部评审团队贡献，**验证状态存疑**）
+
+| 路径 | 内容 | 我们的验证判定 |
+|---|---|---|
+| `benchmarks/eval_end_to_end.py` | 8K–32K NIAH 评测 harness | ❌ 合成数据，无真实模型 |
+| `docs/track_a_benchmark_report.md` | Track A 基准报告 | ⚠️ 数字不可采信，见质疑文档 §2.1–2.2 |
+| `docs/comparative_study_report.md` | 四系统能力对比白皮书 | ⚠️ 含推导/专家意见冒充实测，见 §2.6 |
+| `csrc/` | C++20 UBBA 求解器、CASA 页表、benchmark | ✅ 求解器 69.75 µs 可信；但 "Effective Bandwidth" 是内存内带宽，非 I/O |
+| `kernels/fused_tier_bias_attention.py` | 混档 tier-bias 注意力 | ⚠️ torch 为可选后端，未跑 GPU |
+| `kvmem_fusion/` | core / ifr / ladder / ubba Python 实现 | ⚠️ 待真实模型验证 |
+| `tests/` | 8 个测试文件（宣称 63–70 passing） | ⚠️ 多数为数值等价性断言，非性能/硬件实测 |
 
 ## 如何复现 / 起步
 
