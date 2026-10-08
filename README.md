@@ -12,7 +12,11 @@
 > ✅ 外部团队已在 `273ae4b` 中**修好了报告诚信问题**（状态改为合成自洽验证、硬件 Gate 标 UNMEASURED、采纳子系统降级）。
 > ✅ 又在 `f093dfd` 中**完成真实模型 P0**（真跑 Qwen2.5-0.5B-Instruct）、补上 Random 基线与误差分解，并实现 `stopping.py`（Wilson / McNemar N=471 / Deff / Lan-DeMets OBF，公式已逐条验算正确）。
 > ⚠️ 第三轮复核（**[`docs/external_review_critique_v3.md`](docs/external_review_critique_v3.md)**）指出两点：M0 判据被事后替换（一条从未测量、一条换用相对误差口径），且真实工作点 σ≈8.03 未被任何阈值分析覆盖。
-> **当前成熟度：T1-PARTIAL**（真实 σ 与 V 敏感性已测，M0 判据待补做）。
+>
+> 🔬 **我们已自己把缺失的实验做掉了**（不是又一份清单）：**[`docs/real_kv_audit_og_report.md`](docs/real_kv_audit_og_report.md)**，代码 [`benchmarks/real_kv_audit_og.py`](benchmarks/real_kv_audit_og.py)（CPU 可复现）。
+> 三个结果：① 独立复现 de-RoPE 自校验（abs 1.3354e-05，与外部团队一致，**确认原 atol 判据应为 FAIL**）；② 真实异质语料下高频保留率 **0.4979**，解释了 0.1612 与 0.4430 的差异来源；③ **recall@64：Arm B 0.6685 vs Arm A 0.6846 —— de-RoPE 合并并未保住检索排序**，真正损失来自块均值合并本身（约 1/3）；④ σ=8.03 是 **massive-activation 幅度伪影**（L2 归一化后仅 0.7965）。
+> **该结果同时推翻了 LADDER L2′ 的技术前提**，我们已据此给出 4 条改进方向（见报告 §5）。
+> **当前成熟度：T1-PARTIAL**（真实 σ 与 V 敏感性已测；recall@64 已由本组补齐）。
 
 所有"预期""目标"均为未实测的假设，文中凡标注「未验证」之处均未经实验确认。融合的两大硬前提——KVMem 闭源引擎 **QW3 的可达性**、以及 **≤256K 区间不需要 re-RoPE**——是后续一切实验的 G0 杀点。请带着这个前提阅读，不要把它当作已验证结论。
 
