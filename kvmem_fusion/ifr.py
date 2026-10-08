@@ -28,6 +28,20 @@ def compute_deroped_mean(keys: np.ndarray) -> Tuple[np.ndarray, float, float]:
     return mean_k, max_dispersion, avg_dispersion
 
 
+def compute_normalized_dispersion(keys: np.ndarray) -> float:
+    """
+    Compute directional max dispersion in cosine / L2-normalized space:
+    max_i ||k_i / ||k_i|| - mean(k / ||k||)||
+    Decoupled from massive activation outlier channel magnitudes.
+    On Qwen2.5-0.5B, real keys have Euclidean MAD ~8.32 but normalized MAD ~0.7965.
+    """
+    norms = np.linalg.norm(keys, axis=-1, keepdims=True)
+    norm_keys = keys / np.maximum(norms, 1e-12)
+    norm_mean = np.mean(norm_keys, axis=0)
+    norm_dists = np.linalg.norm(norm_keys - norm_mean, axis=-1)
+    return float(np.max(norm_dists))
+
+
 @dataclass
 class IFRBlock:
     """Represents a 32-token logical block in IFR storage."""
@@ -37,8 +51,9 @@ class IFRBlock:
     values: np.ndarray  # [32, dim]
     orig_pos_start: int
     mean_k: np.ndarray = field(default_factory=lambda: np.zeros(0))
-    dispersion: float = 0.0  # max_i ||k_i - mean_k|| (dev_meta)
+    dispersion: float = 0.0  # max_i ||k_i - mean_k|| (dev_meta raw Euclidean)
     avg_dispersion: float = 0.0
+    norm_dispersion: float = 0.0  # directional dispersion in cosine space (~0.80 on real models)
     doublet_centroids: Optional[List[np.ndarray]] = None
     prefix_hash: Optional[str] = None
     parent_hash: Optional[str] = None
@@ -46,6 +61,8 @@ class IFRBlock:
     def __post_init__(self):
         if len(self.mean_k) == 0:
             self.mean_k, self.dispersion, self.avg_dispersion = compute_deroped_mean(self.keys)
+        if self.norm_dispersion == 0.0 and len(self.keys) > 0:
+            self.norm_dispersion = compute_normalized_dispersion(self.keys)
         if self.prefix_hash is None:
             self.prefix_hash = compute_prefix_hash(self.tokens, parent_hash=self.parent_hash)
 
@@ -125,9 +142,14 @@ class AntiCollapseSplitter:
     Anti-collapse detects max dispersion dev_meta > theta and splits into doublet:
         1. Needle centroid (the outlier token vector k_needle)
         2. Residual background centroid (mean of remaining 31 tokens)
+
+    Supports both:
+    - raw Euclidean dispersion threshold (default 0.85)
+    - normalized directional dispersion threshold (use_normalized=True, calibrated ~0.80 on real models)
     """
-    def __init__(self, dispersion_threshold: float = 0.85):
+    def __init__(self, dispersion_threshold: float = 0.85, use_normalized: bool = False):
         self.dispersion_threshold = dispersion_threshold
+        self.use_normalized = use_normalized
 
     def inspect_and_split(self, block: IFRBlock) -> Tuple[bool, List[np.ndarray]]:
         """
@@ -139,11 +161,19 @@ class AntiCollapseSplitter:
         if block.doublet_centroids is not None:
             return True, block.doublet_centroids
 
-        if block.dispersion <= self.dispersion_threshold:
+        metric = block.norm_dispersion if self.use_normalized else block.dispersion
+        if metric <= self.dispersion_threshold:
             return False, [block.mean_k]
 
         # Detect needle: the token with maximum distance from mean
-        dists = np.linalg.norm(block.keys - block.mean_k, axis=-1)
+        if self.use_normalized:
+            norms = np.linalg.norm(block.keys, axis=-1, keepdims=True)
+            norm_keys = block.keys / np.maximum(norms, 1e-12)
+            norm_mean = np.mean(norm_keys, axis=0)
+            dists = np.linalg.norm(norm_keys - norm_mean, axis=-1)
+        else:
+            dists = np.linalg.norm(block.keys - block.mean_k, axis=-1)
+
         needle_idx = int(np.argmax(dists))
         needle_vec = block.keys[needle_idx]
 

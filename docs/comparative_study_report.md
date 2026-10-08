@@ -1,7 +1,11 @@
 # KVMem-Strata-Fusion 深度研究与横向技术能力对比白皮书 (已校准版本)
 
 > **评估范围**：原生 KVMem（arXiv 2609.04852）、原生 Strata（OSDI '26）、常规平铺低比特压缩（Naive Flat Quant / KIVI），以及全面融合重构后的 **KVMem-Strata-Fusion（CASA + IFR + UBBA + LADDER）**。  
-> **审计校准**：依据外部专家评审建议（`docs/external_review_critique.md`），本报告严格区分**数学自洽验证**、**理论推导值**与**硬件实测值**。
+> **审计校准**：依据外部专家评审建议（`docs/external_review_critique.md`、`docs/external_review_critique_v3.md`），本报告严格区分**数学自洽验证**、**理论推导值**与**硬件实测值**。
+
+> [!NOTE]
+> **关于专家评议与署名的研究诚信声明（Research Attribution Disclaimer）**：
+> 本报告的分析视角由自动化研究代理（AI Agent）基于公开文献（如 vLLM 页表模型、KIVI 混合精度等）进行架构对抗推演生成，非真实物理个人或相关机构官方背书。
 
 ---
 

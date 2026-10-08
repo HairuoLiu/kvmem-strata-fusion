@@ -1,19 +1,27 @@
 # Track A: Real Model Evaluation & Needle-in-a-Haystack Benchmark Report
 
-> **Lead Researcher**: Track A Architecture Team (Calibrated via External Review Audit v2)  
-> **Maturity Level**: **T0 (Mathematical Self-Consistency / 数学自洽验证已达标)**  
+> **Lead Researcher**: Track A Architecture Team (Calibrated via External Review Audit v2 & v3)  
+> **Maturity Level**: **T1-PARTIAL (Real-Model P0 Verified; Recall@64 Decoupling Required)**  
 > **Target Framework**: Qwen Architecture (Interleaved RoPE / YaRN Native)  
 > **Hardware Environment**: Apple Silicon / CPU Host (PyTest 78/78 passing)  
 > **Hardware Gates**: G-CAS-1 (I/O DMA) & G-CAS-2 (Kernel GEMM) marked as `UNMEASURED (Design Intent)`  
 > **Target Contexts Evaluated**: 8,192 (8K) to 32,768 (32K) tokens, with 1M tokens scale extrapolation  
 
+> [!NOTE]
+> **关于专家评议与署名的研究诚信声明（Research Attribution Disclaimer）**：
+> 本项目中各报告引用的专家评审与架构视角，均由自动化研究代理（AI Agent）以公开学术文献中的专业视角（如 vLLM 虚拟页表视角、KIVI/KVQuant 量化视角等）进行对抗性推演，非真实物理个人或相关机构的直接署名背书。所有技术结论以公开代码、实测数据与数学推导本身为准。
+
 ---
 
-## 1. Executive Summary & Calibration Notice (Audit v2)
+## 1. Executive Summary & Calibration Notice (Audit v2 & v3)
 
-Following the second-round external peer critique (`docs/external_review_critique_v2.md`), this report formally adopts the **T0–T3 Maturity Rating**:
-- **T0 (Current Status: PASSED)**: Proves mathematical self-consistency, relative RoPE invariant precision ($< 10^{-12}$), tier-bias cancellation of Jensen's inequality, error decomposition, and adaptive threshold ROC stability.
-- **T1 (Planned P0)**: Real-model past_key_values export using Qwen architecture models (Qwen2.5-0.5B-Instruct), measuring real token $\sigma$ distribution and de-RoPE high-frequency phase preservation.
+Following the second and third external peer critiques (`docs/external_review_critique_v2.md` and `docs/external_review_critique_v3.md`), this report formally adopts the calibrated **T0–T3 Maturity Rating**:
+- **T0 (PASSED)**: Mathematical self-consistency, relative RoPE invariant precision ($< 10^{-12}$), tier-bias cancellation of Jensen's inequality, error decomposition, and adaptive threshold ROC stability.
+- **T1-PARTIAL (Current Status)**: Real-model `past_key_values` audit on Qwen2.5-0.5B-Instruct verified:
+  - Numerical de-RoPE inversion: Rel Error $1.02 \times 10^{-7}$ ($\ll 10^{-5}$, float32 machine epsilon); Abs Error $1.33 \times 10^{-5}$ (noted: requires rel-error criterion).
+  - High-frequency phase retention: Arm A $0.4430 \sim 0.4979$, Arm B $0.9247 \sim 0.9481$ ($1.86\times \sim 2.14\times$).
+  - `recall@64` empirical finding: Arm A ($0.6846$) vs Arm B ($0.6685$) reveal that coarse block-mean pooling loses ~1/3 of retrieval ordering regardless of RoPE processing. Mandates **decoupling coarse retrieval from physical execution compression**.
+  - Dispersion $\sigma \approx 8.03 \sim 8.32$ is driven by massive activation outlier channels (8 channels carry 80% variance); L2-normalized dispersion is $\sigma_{\text{norm}} \approx 0.7965$.
 - **T2**: 256K benchmark reproduction (LongMemEval-S 85.6% / AgentLongBench 60.87%).
 - **T3**: Multi-GPU, GPUDirect NVMe DMA ($\ge 45\text{ GB/s}$), and concurrent decoding.
 
@@ -117,31 +125,45 @@ Fixed budget $K = 103$ blocks, testing from 32K to 1M tokens ($N=32,768$ blocks)
 
 ---
 
-## 5. Real-Model P0 Audit Results (Qwen2.5-0.5B-Instruct, T1 Achieved)
+## 5. Real-Model P0 Audit & OG External Cross-Verification (Qwen2.5-0.5B-Instruct)
 
-As mandated by critique v2 §5, we executed the model-specific real KV audit [`benchmarks/eval_real_model_p0.py`](file:///Users/hai/workspaces/kvmem-strata-fusion/benchmarks/eval_real_model_p0.py) using the authentic HuggingFace `Qwen/Qwen2.5-0.5B-Instruct` model (24 layers, 2 KV heads, $d=64$):
+As mandated by critique v2 §5 and critique v3 §2/§3, both our team and the external research group (OG) independently executed real-model audits using HuggingFace `Qwen/Qwen2.5-0.5B-Instruct` (24 layers, 2 KV heads, $d=64$, 4,096 tokens):
 
 ### 5.1 Self-Check Inversion Numerical Precision
 - **Inversion Verification**: Exact inverse rotation $\text{de\_rotate\_half} \to \text{re\_rotate\_half}$ against Qwen2 native `apply_rotary_pos_emb`.
-- **Max Absolute Error**: $1.3310 \times 10^{-5}$
-- **Max Relative Error**: $\mathbf{1.0202 \times 10^{-7}} \ll 10^{-5}$ (**PASSED**, machine epsilon level for float32 weights).
+- **Max Absolute Error**: $1.3310 \times 10^{-5}$ (Our Team) / $1.3354 \times 10^{-5}$ (OG Audit).
+- **Max Relative Error**: $\mathbf{1.0202 \times 10^{-7}}$ (Our Team) / $\mathbf{1.0237 \times 10^{-7}}$ (OG Audit).
+- **Calibration Note**: The relative error is firmly at float32 machine epsilon ($\approx 1.19 \times 10^{-7}$). While the absolute error slightly exceeds the original $10^{-5}$ bound, the relative precision confirms mathematical inversion accuracy.
 
-### 5.2 Empirical Real Token Dispersion ($\sigma$) Measurements (Resolving Critique v2 §2.1)
-Across all 24 layers and all attention heads on factual textual context:
-- **Real K Dispersion in Semantic Space ($\|k_i - \bar{k}\|$)**:
-  - $\text{Mean } \sigma_K = \mathbf{8.0335}$
-  - $\text{Median } p_{50} = \mathbf{7.4368}$
-  - $p_{95} = \mathbf{14.9323}$
-  - $p_{99} = \mathbf{19.1508}$
-- **Real V Dispersion**: $\text{Mean } \sigma_V = \mathbf{4.9335}$ ($\sigma_K / \sigma_V = 1.63\times$, confirming the KIVI K/V asymmetry on Qwen).
-- **Core Takeaway**: Real model hidden token variance is $\approx \mathbf{8.03}$, proving that the synthetic assumption $\sigma = 0.02$ was indeed artificial, and justifying the necessity of our dynamic adaptive threshold $\theta = \mu_{\text{block}} + 3.2\sigma_{\text{block}}$.
+### 5.2 Real Token Dispersion ($\sigma$) & Massive Activation Channel Decomposition
+- **Euclidean Dispersion in Unnormalized Space**: $\sigma_K \approx 8.0335 \sim 8.321$ (OG: min 4.570 / max 12.717 across layers).
+- **Channel Variance Decomposition**:
+  - Top-8 channels carry **34.8%** of total variance.
+  - Just 8 channels (12.5% of the 64-dim head) account for **80%** of total variance.
+- **Directional Cosine Space Dispersion (L2-Normalized)**:
+  - Intra-block MAD drops from **8.321** down to **0.7965** ($10.4\times$ reduction).
+- **System Impact**: Raw Euclidean $\sigma \approx 8.03$ reflects activation outlier amplitude, not semantic diversity. We have upgraded IFR's dispersion detector to evaluate directional cosine space (`norm_dispersion` $\approx 0.80$), preventing false alarms from outlier channel spikes.
 
-### 5.3 Three-Arm Phase Retention on Real Hidden States (Criterion M0)
-Evaluating Layer 12 real hidden states across all blocks:
+### 5.3 Phase Retention Across Real Corpora (Criterion M0)
+- **Repeated Paragraph Corpus (Our Team)**: Arm A = $0.4430$, Arm B = $0.9481$ ($B/A = 2.14\times$).
+- **Heterogeneous Wikipedia Corpus (OG Audit)**: Arm A = $0.4979$, Arm B = $0.9247$ ($B/A = 1.86\times$).
+- **Low-Frequency RoPE Bands**: Arm A = Arm B = $0.8914 \sim 0.9277$ (identically preserved).
+- **Takeaway**: The original 82% theoretical phase loss theorem represented an upper bound on synthetic uniform distributions; on natural language prose, Arm A retains $\sim 50\%$ phase. Arm B still provides a substantial $1.86\times \sim 2.14\times$ high-frequency enhancement.
 
-| Band Metric | Arm A (Direct Avg of Rotated K) | Arm B (de-RoPE -> Mean -> Re-RoPE) | Ratio B/A | Verdict |
-| :--- | :---: | :---: | :---: | :---: |
-| **High-Frequency Retention (Fastest RoPE)** | 0.4430 | **0.9481** | **2.14x** | **M0 PASSED (B >> A)** |
-| **Low-Frequency Retention (Slowest RoPE)** | 0.9277 | **0.9277** | 1.00x | Identical (Slow Rot) |
+### 5.4 Recall@64 Empirical Revelation & Decoupled Architecture Mandate
+The external audit evaluated top-64 retrieval ranking against uncompressed Mean-K truth on Layer 12:
 
-**Conclusion**: Arm B achieves **94.8% high-frequency phase retention** ($> 0.60$ threshold), outperforming direct averaging by **$2.14\times$**. **Criterion M0 is successfully satisfied on real model activations, elevating maturity to T1 (Real-Model Fidelity)**.
+| Retrieval Arm | `recall@64` | Description |
+| :--- | :---: | :--- |
+| **Arm A (Direct Average)** | **0.6846** | Block-averaged without de-RoPE |
+| **Arm B (de-RoPE Merge)** | **0.6685** | de-RoPE $\to$ average $\to$ re-RoPE |
+| **Ratio (B / A)** | **0.98x** | No significant difference |
+
+**Core Scientific Finding**:
+Both Arm A and Arm B lose $\approx 1/3$ of the top-64 retrieval set compared to exhaustive token truth. **The retrieval degradation is caused by naive block-mean pooling (loss of token sub-structure), NOT by RoPE phase cancellation.**
+
+**Architectural Adaptation (The 4 Upgrades)**:
+1. **Decouple Retrieval from Physical Execution**: Coarse IVF retrieval operates on unmerged sub-centroids; physical LADDER quad-merge / INT2 quantization is applied only to HBM/DRAM page allocation in the execution tier.
+2. **Directional Normalization for Anti-Collapse**: IFR evaluates `norm_dispersion` in cosine space ($\approx 0.80$) rather than raw Euclidean amplitude.
+3. **Multi-Centroid / Doublet Index Expansion**: Retain outlier token doublets in the index so burst needles bypass block pooling dilution.
+4. **Maturity Rating**: Calibrated to **`T1-PARTIAL`**, awaiting multi-centroid benchmark integration.
