@@ -10,8 +10,9 @@
 > **第一轮质疑（含证据行号）：[`docs/external_review_critique.md`](docs/external_review_critique.md)**
 >
 > ✅ 外部团队已在 `273ae4b` 中**修好了报告诚信问题**（状态改为合成自洽验证、硬件 Gate 标 UNMEASURED、采纳子系统降级）。
-> ⚠️ 但第二轮复核（**[`docs/external_review_critique_v2.md`](docs/external_review_critique_v2.md)**）发现：新审计暴露了两个**机制有效性**问题——虚警率在 σ≥0.10 时达 99.85%（意味着 IFR 会按他们自己的规则退化为 KVMem 基线）、CosSim 0.28 因缺少 oracle-uncompressed 对照而不可解释。
-> **当前成熟度：T0（数学自洽），尚未达到 T1（真实模型保真）。**
+> ✅ 又在 `f093dfd` 中**完成真实模型 P0**（真跑 Qwen2.5-0.5B-Instruct）、补上 Random 基线与误差分解，并实现 `stopping.py`（Wilson / McNemar N=471 / Deff / Lan-DeMets OBF，公式已逐条验算正确）。
+> ⚠️ 第三轮复核（**[`docs/external_review_critique_v3.md`](docs/external_review_critique_v3.md)**）指出两点：M0 判据被事后替换（一条从未测量、一条换用相对误差口径），且真实工作点 σ≈8.03 未被任何阈值分析覆盖。
+> **当前成熟度：T1-PARTIAL**（真实 σ 与 V 敏感性已测，M0 判据待补做）。
 
 所有"预期""目标"均为未实测的假设，文中凡标注「未验证」之处均未经实验确认。融合的两大硬前提——KVMem 闭源引擎 **QW3 的可达性**、以及 **≤256K 区间不需要 re-RoPE**——是后续一切实验的 G0 杀点。请带着这个前提阅读，不要把它当作已验证结论。
 
@@ -64,7 +65,8 @@
 | `plan-03-ubba/` | ✅ 研究报告（UBBA：统一字节预算器，约束集修正版） |
 | `plan-04-casa/` | ✅ 研究报告（CASA：规范原子存储架构，K-Freeze + 前缀哈希链） |
 | `docs/external_review_critique.md` | ✅ 第一轮技术质疑：证据行号 + 正确验证方法 + 建议 |
-| `docs/external_review_critique_v2.md` | ✅ **【最新】第二轮复核（针对 273ae4b）**：机制有效性边界、必补对照清单、真实模型 P0 完整可执行协议、T0–T3 成熟度分级 |
+| `docs/external_review_critique_v2.md` | ✅ 第二轮复核（针对 273ae4b）：机制有效性边界、必补对照清单、真实模型 P0 完整可执行协议、T0–T3 成熟度分级 |
+| `docs/external_review_critique_v3.md` | ✅ **【最新】第三轮复核（针对 f093dfd）**：M0 判据事后替换、真实 σ 未被覆盖、索引漏 L×H_kv、配对检验用非配对 SE，并含**我们自身 82% 论证的修正** |
 | `prompts/` | 🚧 可执行 AI prompt（每方案一份 + 共享 eval prompt）待生成 |
 | 各方案 `design-doc.md` | 🚧 设计文档（UML + milestone）待生成 |
 
