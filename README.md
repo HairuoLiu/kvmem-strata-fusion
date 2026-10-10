@@ -13,10 +13,19 @@
 > ✅ 又在 `f093dfd` 中**完成真实模型 P0**（真跑 Qwen2.5-0.5B-Instruct）、补上 Random 基线与误差分解，并实现 `stopping.py`（Wilson / McNemar N=471 / Deff / Lan-DeMets OBF，公式已逐条验算正确）。
 > ⚠️ 第三轮复核（**[`docs/external_review_critique_v3.md`](docs/external_review_critique_v3.md)**）指出两点：M0 判据被事后替换（一条从未测量、一条换用相对误差口径），且真实工作点 σ≈8.03 未被任何阈值分析覆盖。
 >
-> 🔬 **我们已自己把缺失的实验做掉了**（不是又一份清单）：**[`docs/real_kv_audit_og_report.md`](docs/real_kv_audit_og_report.md)**，代码 [`benchmarks/real_kv_audit_og.py`](benchmarks/real_kv_audit_og.py)（CPU 可复现）。
-> 三个结果：① 独立复现 de-RoPE 自校验（abs 1.3354e-05，与外部团队一致，**确认原 atol 判据应为 FAIL**）；② 真实异质语料下高频保留率 **0.4979**，解释了 0.1612 与 0.4430 的差异来源；③ **recall@64：Arm B 0.6685 vs Arm A 0.6846 —— de-RoPE 合并并未保住检索排序**，真正损失来自块均值合并本身（约 1/3）；④ σ=8.03 是 **massive-activation 幅度伪影**（L2 归一化后仅 0.7965）。
-> **该结果同时推翻了 LADDER L2′ 的技术前提**，我们已据此给出 4 条改进方向（见报告 §5）。
-> **当前成熟度：T1-PARTIAL**（真实 σ 与 V 敏感性已测；recall@64 已由本组补齐）。
+> 🔬 **我们已自己把缺失的实验做掉了**（不是又一份清单）：v1 **[`docs/real_kv_audit_og_report.md`](docs/real_kv_audit_og_report.md)**，v2 **[`docs/real_kv_audit_og_v2_report.md`](docs/real_kv_audit_og_v2_report.md)**；代码 [`benchmarks/real_kv_audit_og.py`](benchmarks/real_kv_audit_og.py) / [`real_kv_audit_og_v2.py`](benchmarks/real_kv_audit_og_v2.py) / [`centroid_law.py`](benchmarks/centroid_law.py)（均 CPU 可复现，约 1 分钟）。
+>
+> **v1 结果**：① 独立复现 de-RoPE 自校验（abs 1.3354e-05，与外部团队一致，**确认原 atol 判据应为 FAIL**）；② 真实异质语料下高频保留率 **0.4979**，解释了 0.1612 与 0.4430 的差异来源；③ σ=8.03 是 **massive-activation 幅度伪影**（L2 归一化后仅 0.7965）。
+>
+> ⛔ **v1 的第 ④ 条已由我们自己撤回**：v1 报的「recall@64 B/A=0.98，de-RoPE 无增益」是**本组的实验假象**——Arm B 被重 RoPE 到块中点而 query 留在去 RoPE 空间，存在位置失配。v2 位置匹配后实测 **B/A = 1.40×**（0.6367 → 0.8913，随机 0.5005）。**LADDER L2′ 的技术前提成立。** 我们同时把新结论写进了 [`plan-02-ladder/research-report.md`](plan-02-ladder/research-report.md) §2.1。
+>
+> **v2 新增结果**：
+> - **方法论**：召回率必须声明「相关性空间」。同一批数据，去 RoPE 空间下 B=0.891；原生空间下 A=0.965。裸 recall 数不可解释。
+> - **新发现 · 迁移惩罚**：块被搬离原位越远，可检索性单调下降。Qwen2.5 在 Δ=2048 掉到 **0.563**（随机 0.497）；Qwen3 衰减较缓（0.850→0.762）。**压缩不是免费的，而压缩正是 KVMem 的核心机制。**
+> - **建设性 · 质心定律**：决定保真度的唯一变量是 **tokens/质心**（组内极差 ≤0.06，组间跨度 0.55→1.00）。KVMem 默认 32 token/质心在 3% 选择率下只有 **0.598**（可实现余量的 58.5%）。同等索引预算下**加质心优于缩小块**（B32/m4 = 0.711 > B8/m1 = 0.654）。
+> - **建设性 · 逐层位置先验**：纯内容索引在浅层与真实注意力**零相关**（L0 ρ=−0.091）。需 `α(layer)·content + (1−α(layer))·recency`，α 由浅层 0.1 递增到深层 0.9，浅层增益高达 +0.97。
+> - **自检**：手工重建的 Q/K/RoPE/GQA 注意力与 transformers eager 实现**逐位一致**（max\|diff\| = 0.000e+00，双模型）。
+> **当前成熟度：T1-PARTIAL**（双架构；限于 4096 token、CPU/fp32、0.5B–0.6B；**无端到端任务质量端点**）。
 
 所有"预期""目标"均为未实测的假设，文中凡标注「未验证」之处均未经实验确认。融合的两大硬前提——KVMem 闭源引擎 **QW3 的可达性**、以及 **≤256K 区间不需要 re-RoPE**——是后续一切实验的 G0 杀点。请带着这个前提阅读，不要把它当作已验证结论。
 
