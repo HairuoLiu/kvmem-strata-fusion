@@ -144,10 +144,10 @@ class AntiCollapseSplitter:
         2. Residual background centroid (mean of remaining 31 tokens)
 
     Supports both:
-    - raw Euclidean dispersion threshold (default 0.85)
-    - normalized directional dispersion threshold (use_normalized=True, calibrated ~0.80 on real models)
+    - normalized directional dispersion threshold (use_normalized=True, default, calibrated theta=0.868 at p95 of real Qwen norm_max)
+    - raw Euclidean dispersion threshold (use_normalized=False, legacy)
     """
-    def __init__(self, dispersion_threshold: float = 0.85, use_normalized: bool = False):
+    def __init__(self, dispersion_threshold: float = 0.868, use_normalized: bool = True):
         self.dispersion_threshold = dispersion_threshold
         self.use_normalized = use_normalized
 
@@ -165,15 +165,9 @@ class AntiCollapseSplitter:
         if metric <= self.dispersion_threshold:
             return False, [block.mean_k]
 
-        # Detect needle: the token with maximum distance from mean
-        if self.use_normalized:
-            norms = np.linalg.norm(block.keys, axis=-1, keepdims=True)
-            norm_keys = block.keys / np.maximum(norms, 1e-12)
-            norm_mean = np.mean(norm_keys, axis=0)
-            dists = np.linalg.norm(norm_keys - norm_mean, axis=-1)
-        else:
-            dists = np.linalg.norm(block.keys - block.mean_k, axis=-1)
-
+        # Detect needle: the token with maximum Euclidean deviation from mean
+        # Outlier token vector carries burst salience (whether needle burst or massive channel)
+        dists = np.linalg.norm(block.keys - block.mean_k, axis=-1)
         needle_idx = int(np.argmax(dists))
         needle_vec = block.keys[needle_idx]
 
@@ -200,12 +194,16 @@ class IVFMeanKIndex:
         dim: int = 64,
         n_clusters: int = 8,
         n_probe: int = 4,
-        dispersion_threshold: float = 0.85
+        dispersion_threshold: float = 0.868,
+        use_normalized: bool = True
     ):
         self.dim = dim
         self.n_clusters = n_clusters
         self.n_probe = n_probe
-        self.anti_collapse = AntiCollapseSplitter(dispersion_threshold=dispersion_threshold)
+        self.anti_collapse = AntiCollapseSplitter(
+            dispersion_threshold=dispersion_threshold,
+            use_normalized=use_normalized
+        )
 
         self.centroids: np.ndarray = np.zeros((n_clusters, dim))
         self.postings: Dict[int, List[str]] = {i: [] for i in range(n_clusters)}
@@ -290,7 +288,8 @@ class IFRRetriever:
         tau_exact_bypass: int = 16,
         n_clusters: int = 8,
         n_probe: int = 4,
-        dispersion_threshold: float = 0.85,
+        dispersion_threshold: float = 0.868,
+        use_normalized: bool = True,
         target_top_k: int = 8
     ):
         self.dim = dim
@@ -301,7 +300,8 @@ class IFRRetriever:
             dim=dim,
             n_clusters=n_clusters,
             n_probe=n_probe,
-            dispersion_threshold=dispersion_threshold
+            dispersion_threshold=dispersion_threshold,
+            use_normalized=use_normalized
         )
         self.blocks: Dict[str, IFRBlock] = {}
         self.content_hashes: Dict[str, str] = {}
