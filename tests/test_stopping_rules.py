@@ -71,9 +71,8 @@ def test_sequential_audit_harness_paired_mcnemar_variance():
     )
 
     # Var(diff) = [(25 + 5) - (25 - 5)^2 / 100] / 10000 = (30 - 4) / 10000 = 0.0026
-    # se_raw = sqrt(0.0026) approx 0.05099
-    # se_adj = se_raw * sqrt(1.9) approx 0.07028
+    # se_adj = sqrt(0.0026) approx 0.05099 (exact paired variance, without duplicate Deff inflation)
     assert np.isclose(res["diff_pp"], 20.0)
-    assert 0.065 <= res["se_adjusted"] <= 0.075
-    assert res["z_statistic"] > 2.5
+    assert 0.048 <= res["se_adjusted"] <= 0.054
+    assert res["z_statistic"] > 3.5
 

@@ -38,29 +38,30 @@ class LayerWeightStreamer:
         self.tmp_file.write(b"\0")
         self.tmp_file.flush()
 
-        self.fd = os.open(self.file_path, os.O_RDONLY)
-        self.mapped_layers = {}
+        self.fd = os.open(self.file_path, os.O_RDWR)
+        # Map file buffer for native OS madvise operations
+        self.file_size = min(self.total_bytes, 1024 * 1024 * 1024)
+        self.mm = mmap.mmap(self.fd, self.file_size)
 
     def prefetch_layer(self, layer_idx: int):
         """Advise OS kernel to asynchronously prefetch next layer from NVMe."""
-        offset = (layer_idx * self.layer_bytes) % (1024 * 1024 * 1024)
-        length = min(self.layer_bytes, 1024 * 1024 * 1024 - offset)
-        try:
-            # POSIX_MADV_WILLNEED / MADV_WILLNEED
-            os.posix_madvise(offset, length, os.POSIX_MADV_WILLNEED)
-        except Exception:
-            pass
+        offset = (layer_idx * self.layer_bytes) % self.file_size
+        length = min(self.layer_bytes, self.file_size - offset)
+        if hasattr(self.mm, "madvise") and hasattr(mmap, "MADV_WILLNEED"):
+            self.mm.madvise(mmap.MADV_WILLNEED, offset, length)
 
     def release_layer(self, layer_idx: int):
         """Advise OS kernel to discard layer after compute to free RAM immediately."""
-        offset = (layer_idx * self.layer_bytes) % (1024 * 1024 * 1024)
-        length = min(self.layer_bytes, 1024 * 1024 * 1024 - offset)
-        try:
-            os.posix_madvise(offset, length, os.POSIX_MADV_DONTNEED)
-        except Exception:
-            pass
+        offset = (layer_idx * self.layer_bytes) % self.file_size
+        length = min(self.layer_bytes, self.file_size - offset)
+        if hasattr(self.mm, "madvise") and hasattr(mmap, "MADV_DONTNEED"):
+            self.mm.madvise(mmap.MADV_DONTNEED, offset, length)
 
     def close(self):
+        try:
+            self.mm.close()
+        except Exception:
+            pass
         os.close(self.fd)
         try:
             os.unlink(self.file_path)

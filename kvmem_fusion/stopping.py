@@ -101,19 +101,20 @@ class SequentialAuditHarness:
         diff = p_b - p_a
         
         if discordant_b_only is not None and discordant_a_only is not None:
-            # Paired McNemar variance calculation
+            # Paired McNemar variance calculation (exact paired variance, do NOT multiply by Deff)
             # b: B passes & A fails; c: A passes & B fails
+            # Var(diff) = [(b + c) - (b - c)^2 / n] / n^2
             b = float(discordant_b_only)
             c = float(discordant_a_only)
             n = float(total_tested)
             var_paired = ((b + c) - ((b - c) ** 2) / n) / (n * n)
-            se_raw = np.sqrt(max(var_paired, 1e-15))
+            se_adj = np.sqrt(max(var_paired, 1e-15))
         else:
-            # Pooled SE adjusted by design effect
+            # Pooled independent SE adjusted by cluster design effect Deff
             p_pool = (successes_a + successes_b) / (2 * total_tested)
             se_raw = np.sqrt(p_pool * (1 - p_pool) * 2 / total_tested)
+            se_adj = se_raw * np.sqrt(self.design_effect)
 
-        se_adj = se_raw * np.sqrt(self.design_effect)
         z_stat = diff / (se_adj + 1e-12)
         
         stopped = abs(z_stat) >= z_bound

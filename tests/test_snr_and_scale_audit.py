@@ -153,13 +153,16 @@ def test_real_qwen_kv_norm_dispersion_bounds_from_audit_data():
     """
     import json
     import os
+    import pytest
 
     json_path = os.path.join(os.path.dirname(__file__), "..", "docs", "ifr_dispersion_check_20261011-093826.json")
-    if os.path.exists(json_path):
-        with open(json_path) as f:
-            data = json.load(f)
-        assert data["overall"]["raw_max"] > 10.0, "Real Qwen keys exhibit raw Euclidean dispersion > 10"
-        assert 0.50 <= data["overall"]["n_max"] <= 0.60, "Directional norm_max should be ~0.55"
-        assert 0.05 <= data["trigger_rate_at"]["0.85"]["norm_max"] <= 0.07, "Threshold ~0.85-0.87 yields selective ~5-6% trigger"
+    if not os.path.exists(json_path):
+        pytest.fail(f"Required real Qwen dispersion audit artifact missing: {json_path}")
+
+    with open(json_path) as f:
+        data = json.load(f)
+    assert data["overall"]["raw_max"] > 10.0, "Real Qwen keys exhibit raw Euclidean dispersion > 10"
+    assert 0.50 <= data["overall"]["n_max"] <= 0.60, "Directional norm_max should be ~0.55"
+    assert 0.05 <= data["trigger_rate_at"]["0.85"]["norm_max"] <= 0.07, "Threshold ~0.85-0.87 yields selective ~5-6% trigger"
 
 

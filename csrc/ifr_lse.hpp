@@ -69,6 +69,17 @@ public:
         std::vector<float>& out_max_scores
     ) const;
 
+    // Decoupled Multi-Centroid Ranking in Cosine / L2-Normalized Space (matches Python benchmark cos_rank)
+    void rank_subcentroids_cosine(
+        const float* query,
+        const float* sub_centroids,
+        size_t num_blocks,
+        size_t subs_per_block,
+        size_t top_k,
+        std::vector<size_t>& out_block_indices,
+        std::vector<float>& out_max_scores
+    ) const;
+
     size_t head_dim() const { return head_dim_; }
     float scale() const { return scale_; }
 
