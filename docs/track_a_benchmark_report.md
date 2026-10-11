@@ -20,8 +20,8 @@ Following the second and third external peer critiques (`docs/external_review_cr
 - **T1-PARTIAL (Current Status)**: Real-model `past_key_values` audit on Qwen2.5-0.5B-Instruct verified:
   - Numerical de-RoPE inversion: Rel Error $1.02 \times 10^{-7}$ ($\ll 10^{-5}$, float32 machine epsilon); Abs Error $1.33 \times 10^{-5}$ (noted: requires rel-error criterion).
   - High-frequency phase retention: Arm A $0.4430 \sim 0.4979$, Arm B $0.9247 \sim 0.9481$ ($1.86\times \sim 2.14\times$).
-  - `recall@64` empirical finding: Arm A ($0.6846$) vs Arm B ($0.6685$) reveal that coarse block-mean pooling loses ~1/3 of retrieval ordering regardless of RoPE processing. Mandates **decoupling coarse retrieval from physical execution compression**.
-  - Dispersion $\sigma \approx 8.03 \sim 8.32$ is driven by massive activation outlier channels (8 channels carry 80% variance); L2-normalized dispersion is $\sigma_{\text{norm}} \approx 0.7965$.
+  - `recall@64` Empirical Calibration (OG v2 Corrected): Position-matched de-RoPE merging achieves Arm B = **0.8913** vs Arm A = **0.6367** (**1.40x gain**, +0.254 improvement). Causal ranking is established as: RoPE Handling (+0.254) > Sub-Centroid Resolution (+0.044) > Relocation Penalty (-0.31). Mandates **position-free de-RoPE sub-centroid retrieval decoupled from physical execution compression**.
+  - Dispersion $\sigma \approx 8.03 \sim 8.32$ is driven by massive activation outlier channels (8 channels carry 80% variance); L2-normalized dispersion is $\sigma_{\text{norm}} \approx 0.7965$ (calibrated $\theta_{\text{norm\_max}} = 0.868$).
 - **T2**: 256K benchmark reproduction (LongMemEval-S 85.6% / AgentLongBench 60.87%).
 - **T3**: Multi-GPU, GPUDirect NVMe DMA ($\ge 45\text{ GB/s}$), and concurrent decoding.
 
@@ -150,20 +150,23 @@ As mandated by critique v2 §5 and critique v3 §2/§3, both our team and the ex
 - **Low-Frequency RoPE Bands**: Arm A = Arm B = $0.8914 \sim 0.9277$ (identically preserved).
 - **Takeaway**: The original 82% theoretical phase loss theorem represented an upper bound on synthetic uniform distributions; on natural language prose, Arm A retains $\sim 50\%$ phase. Arm B still provides a substantial $1.86\times \sim 2.14\times$ high-frequency enhancement.
 
-### 5.4 Recall@64 Empirical Revelation & Decoupled Architecture Mandate
-The external audit evaluated top-64 retrieval ranking against uncompressed Mean-K truth on Layer 12:
+### 5.4 Recall@64 Empirical Calibration & Decoupled Architecture Mandate
+The external audit evaluated top-64 retrieval ranking against uncompressed Mean-K truth on Layer 12 across 5 seeds:
 
 | Retrieval Arm | `recall@64` | Description |
 | :--- | :---: | :--- |
-| **Arm A (Direct Average)** | **0.6846** | Block-averaged without de-RoPE |
-| **Arm B (de-RoPE Merge)** | **0.6685** | de-RoPE $\to$ average $\to$ re-RoPE |
-| **Ratio (B / A)** | **0.98x** | No significant difference |
+| **Arm A (Direct Average)** | **0.6367** | Block-averaged without de-RoPE |
+| **Arm B (Position-Matched de-RoPE)** | **0.8913** | de-RoPE $\to$ average in unrotated space (**1.40x gain, +0.254**) |
+| **Arm Bmid (Legacy v1, Misaligned)** | **0.6016** | de-RoPE $\to$ average $\to$ re-RoPE to block midpoint (Retracted artifact) |
+| **Random Baseline** | **0.5005** | Random permutation chance level |
 
-**Core Scientific Finding**:
-Both Arm A and Arm B lose $\approx 1/3$ of the top-64 retrieval set compared to exhaustive token truth. **The retrieval degradation is caused by naive block-mean pooling (loss of token sub-structure), NOT by RoPE phase cancellation.**
+**Core Scientific Finding & Causal Decomposition**:
+1. **RoPE Handling (+0.254)**: Removing position contamination before averaging yields the largest single fidelity gain ($0.6367 \to 0.8913$).
+2. **Sub-Centroid Resolution (+0.044)**: Expanding from $m=1$ to $m=4$ sub-centroids per block further pushes recall from $0.8913 \to 0.9350$.
+3. **Relocation Penalty (-0.31)**: Compacting blocks across large offsets ($\Delta=2048$) penalizes uncalibrated retrieval ($0.877 \to 0.563$).
 
 **Architectural Adaptation (The 4 Upgrades)**:
-1. **Decouple Retrieval from Physical Execution**: Coarse IVF retrieval operates on unmerged sub-centroids; physical LADDER quad-merge / INT2 quantization is applied only to HBM/DRAM page allocation in the execution tier.
-2. **Directional Normalization for Anti-Collapse**: IFR evaluates `norm_dispersion` in cosine space ($\approx 0.80$) rather than raw Euclidean amplitude.
+1. **Decouple Retrieval from Physical Execution**: Coarse IVF retrieval operates strictly in **unrotated (de-RoPE) space using sub-centroids** ($m=2$ default / $m=4$ high fidelity); physical LADDER quad-merge / INT2 quantization is applied only to HBM/DRAM page allocation in the execution tier.
+2. **Directional Normalization for Anti-Collapse**: IFR evaluates `norm_dispersion` in directional cosine space with calibrated threshold $\theta = 0.868$ (5.8% trigger rate at p95) rather than raw Euclidean amplitude.
 3. **Multi-Centroid / Doublet Index Expansion**: Retain outlier token doublets in the index so burst needles bypass block pooling dilution.
-4. **Maturity Rating**: Calibrated to **`T1-PARTIAL`**, awaiting multi-centroid benchmark integration.
+4. **Maturity Rating**: Calibrated to **`T1-PARTIAL`**, awaiting multi-model generalization.
