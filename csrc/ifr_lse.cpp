@@ -176,6 +176,54 @@ void LSEEngine::rank_unnormalized(
     out_indices.resize(k);
 }
 
+void LSEEngine::rank_subcentroids_unnormalized(
+    const float* query,
+    const float* sub_centroids,
+    size_t num_blocks,
+    size_t subs_per_block,
+    size_t top_k,
+    std::vector<size_t>& out_block_indices,
+    std::vector<float>& out_max_scores
+) const {
+    if (num_blocks == 0) {
+        out_block_indices.clear();
+        out_max_scores.clear();
+        return;
+    }
+
+    out_max_scores.resize(num_blocks);
+    out_block_indices.resize(num_blocks);
+
+    for (size_t b = 0; b < num_blocks; ++b) {
+        float max_s = -1e30f;
+        const size_t block_offset = b * subs_per_block * head_dim_;
+        for (size_t s = 0; s < subs_per_block; ++s) {
+            const float* sub_vec = sub_centroids + block_offset + (s * head_dim_);
+            const float dot = dot_product_simd(query, sub_vec, head_dim_);
+            const float score = dot * scale_;
+            if (score > max_s) {
+                max_s = score;
+            }
+        }
+        out_max_scores[b] = max_s;
+        out_block_indices[b] = b;
+    }
+
+    const size_t k = std::min(top_k, num_blocks);
+    const float* scores_ptr = out_max_scores.data();
+
+    std::partial_sort(
+        out_block_indices.begin(),
+        out_block_indices.begin() + k,
+        out_block_indices.end(),
+        [scores_ptr](size_t a, size_t b) {
+            return scores_ptr[a] > scores_ptr[b];
+        }
+    );
+
+    out_block_indices.resize(k);
+}
+
 AntiCollapseDispersionTracker::AntiCollapseDispersionTracker(
     float dispersion_threshold,
     size_t head_dim

@@ -53,3 +53,27 @@ def test_sequential_audit_harness_early_stop():
     res = harness.evaluate_interim_look(look_index=0, successes_a=40, successes_b=95, total_tested=118)
     assert bool(res["should_stop_early"]) is True
     assert res["z_statistic"] > res["z_boundary"]
+
+
+def test_sequential_audit_harness_paired_mcnemar_variance():
+    """Verify Critique v3 §8.2 recommendation: exact discordant pairs McNemar SE."""
+    harness = SequentialAuditHarness(target_pairs=471, num_looks=4, icc=0.3, num_seeds_per_task=4)
+
+    # 100 total tested, A passes 60, B passes 80
+    # Discordant pairs: b (A fail, B pass) = 25, c (A pass, B fail) = 5
+    res = harness.evaluate_interim_look(
+        look_index=0,
+        successes_a=60,
+        successes_b=80,
+        total_tested=100,
+        discordant_b_only=25,
+        discordant_a_only=5
+    )
+
+    # Var(diff) = [(25 + 5) - (25 - 5)^2 / 100] / 10000 = (30 - 4) / 10000 = 0.0026
+    # se_raw = sqrt(0.0026) approx 0.05099
+    # se_adj = se_raw * sqrt(1.9) approx 0.07028
+    assert np.isclose(res["diff_pp"], 20.0)
+    assert 0.065 <= res["se_adjusted"] <= 0.075
+    assert res["z_statistic"] > 2.5
+

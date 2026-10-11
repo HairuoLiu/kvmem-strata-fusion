@@ -68,26 +68,51 @@ def compute_cluster_design_effect(num_seeds_per_task: int = 4, icc: float = 0.3)
 
 class SequentialAuditHarness:
     """Audits sequential test stream against OBF stopping rules."""
-    def __init__(self, target_pairs: int = 471, num_looks: int = 4, icc: float = 0.3):
+    def __init__(self, target_pairs: int = 471, num_looks: int = 4, icc: float = 0.3, num_seeds_per_task: int = 4):
         self.target_pairs = target_pairs
         self.num_looks = num_looks
         self.icc = icc
+        self.num_seeds_per_task = num_seeds_per_task
         self.look_fractions = [float(k) / num_looks for k in range(1, num_looks + 1)]
         self.look_samples = [int(np.ceil(t * target_pairs)) for t in self.look_fractions]
-        self.design_effect = compute_cluster_design_effect(4, icc)
+        self.design_effect = compute_cluster_design_effect(num_seeds_per_task, icc)
 
-    def evaluate_interim_look(self, look_index: int, successes_a: int, successes_b: int, total_tested: int) -> Dict[str, float]:
+    def evaluate_interim_look(
+        self,
+        look_index: int,
+        successes_a: int,
+        successes_b: int,
+        total_tested: int,
+        discordant_b_only: Optional[int] = None,
+        discordant_a_only: Optional[int] = None
+    ) -> Dict[str, float]:
+        """
+        Evaluate interim look under Lan-DeMets OBF alpha spending.
+        Supports both:
+        - Exact paired discordant counts: b (A fail, B pass), c (A pass, B fail)
+          Var(diff) = [(b + c) - (b - c)^2 / n] / n^2 (Critique v3 §8.2 recommendation)
+        - Independent pooled approximation if discordant counts are omitted (backward compatible).
+        """
         t = self.look_fractions[look_index]
         cum_alpha, z_bound = compute_lan_demets_obf_boundary(t)
         
-        # Paired difference
         p_a = successes_a / total_tested
         p_b = successes_b / total_tested
         diff = p_b - p_a
         
-        # Pooled SE adjusted by design effect
-        p_pool = (successes_a + successes_b) / (2 * total_tested)
-        se_raw = np.sqrt(p_pool * (1 - p_pool) * 2 / total_tested)
+        if discordant_b_only is not None and discordant_a_only is not None:
+            # Paired McNemar variance calculation
+            # b: B passes & A fails; c: A passes & B fails
+            b = float(discordant_b_only)
+            c = float(discordant_a_only)
+            n = float(total_tested)
+            var_paired = ((b + c) - ((b - c) ** 2) / n) / (n * n)
+            se_raw = np.sqrt(max(var_paired, 1e-15))
+        else:
+            # Pooled SE adjusted by design effect
+            p_pool = (successes_a + successes_b) / (2 * total_tested)
+            se_raw = np.sqrt(p_pool * (1 - p_pool) * 2 / total_tested)
+
         se_adj = se_raw * np.sqrt(self.design_effect)
         z_stat = diff / (se_adj + 1e-12)
         
