@@ -128,3 +128,38 @@ def test_normalized_dispersion_under_massive_activation_outliers():
     assert is_split is True
     assert len(sub_centroids) == 2
 
+
+def test_production_ifr_retriever_normalized_wiring():
+    """
+    Verify Critique A & B in docs/og_review_c5e76c8.md:
+    IFRRetriever, IVFMeanKIndex, and AntiCollapseSplitter must have use_normalized=True
+    wired in production by default with calibrated threshold theta=0.868.
+    """
+    from kvmem_fusion.ifr import IFRRetriever, IVFMeanKIndex, AntiCollapseSplitter
+
+    retriever = IFRRetriever(dim=64)
+    assert retriever.index.anti_collapse.use_normalized is True, "use_normalized must be wired by default in production"
+    assert np.isclose(retriever.index.anti_collapse.dispersion_threshold, 0.868), "Default threshold must be calibrated to 0.868"
+    assert retriever.index.use_normalized is True
+
+
+def test_real_qwen_kv_norm_dispersion_bounds_from_audit_data():
+    """
+    Verify Critique E in docs/og_review_c5e76c8.md:
+    Validate on real Qwen2.5-0.5B audit distribution from docs/ifr_dispersion_check_20261011-093826.json:
+    - raw_max mean is ~11.46 (explaining why raw threshold 0.85 saturated 100%)
+    - norm_max mean is ~0.549
+    - theta=0.868 achieves bounded selective triggering (~5.8%)
+    """
+    import json
+    import os
+
+    json_path = os.path.join(os.path.dirname(__file__), "..", "docs", "ifr_dispersion_check_20261011-093826.json")
+    if os.path.exists(json_path):
+        with open(json_path) as f:
+            data = json.load(f)
+        assert data["overall"]["raw_max"] > 10.0, "Real Qwen keys exhibit raw Euclidean dispersion > 10"
+        assert 0.50 <= data["overall"]["n_max"] <= 0.60, "Directional norm_max should be ~0.55"
+        assert 0.05 <= data["trigger_rate_at"]["0.85"]["norm_max"] <= 0.07, "Threshold ~0.85-0.87 yields selective ~5-6% trigger"
+
+

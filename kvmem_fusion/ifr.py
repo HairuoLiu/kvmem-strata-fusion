@@ -200,6 +200,8 @@ class IVFMeanKIndex:
         self.dim = dim
         self.n_clusters = n_clusters
         self.n_probe = n_probe
+        self.dispersion_threshold = dispersion_threshold
+        self.use_normalized = use_normalized
         self.anti_collapse = AntiCollapseSplitter(
             dispersion_threshold=dispersion_threshold,
             use_normalized=use_normalized
