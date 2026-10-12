@@ -20,6 +20,10 @@
 | **NVMe 闪存 I/O** | **APFS + Mach VM / mmap**<br>系统级 `madvise(MADV_WILLNEED)`，顺序读速约 3.5 ~ 5.5 GB/s | **Win32 IOCP + DirectStorage**<br>支持 GPU DirectStorage (NVMe $\to$ VRAM 旁路)，PCIe 5.0 SSD 读速可达 **12.0 ~ 14.5 GB/s** | **Windows 高端 NVMe 物理读取吞吐是 Mac 板载闪存的 2.5 ~ 3.5 倍**。 |
 | **计算后端** | ARM Neon SIMD + Metal (MPS) | x86 AVX-512 / AMX + NVIDIA CUDA / Triton | Windows NVIDIA Tensor Core 浮点峰值算力大幅领先。 |
 
+> **带宽口径声明**：M1 基座实测为 **68.25 GB/s**（LPDDR4X），M1 Pro ≈ 200 GB/s、M1 Max ≈ 400 GB/s、M2 Ultra ≈ 800 GB/s；
+> "Base ~150 GB/s" 不对应任何量产芯片。§3.2 场景 1 采用的 150 GB/s 属 **M1 Pro 级假设**，引用该结论时必须同时声明机型
+> （若按 M 系列基座 68–100 GB/s 计，32B 常驻为 **3.4 ~ 5.0 tok/s**，而非 7.5）。
+
 ---
 
 ## 2. 32GB 物理内存宿主机：模型运行尺寸的理论极限
@@ -36,12 +40,17 @@
 
 * **常驻规模物理判定矩阵**：
 
-| 模型参数量 | 4-bit 量化权重体积 ($W$) | 留给 KV Cache 的余量 | 理论最大可承载真实上下文 | 判定结论 |
-| :--- | :--- | :--- | :--- | :--- |
-| **7B / 8B** | $\approx 4.8\text{ GB}$ | $\approx 21.2\text{ GB}$ | $> 256\text{K tokens}$ (配合 UBBA 压缩) | **完全常驻，性能最优** |
-| **14B** | $\approx 9.2\text{ GB}$ | $\approx 16.8\text{ GB}$ | $\approx 128\text{K tokens}$ | **完全常驻，平稳运行** |
-| **32B** | $\approx 19.8\text{ GB}$ | $\approx 6.2\text{ GB}$ | $\approx 32\text{K tokens}$ | **物理常驻的理论实用上限** |
-| **70B / 72B** | $\approx 42.0\text{ GB}$ | 负数 ($-16\text{ GB}$) | $0$ (直接 OOM) | **不可常驻** (除非 2-bit 极端劣化至 22GB) |
+| 模型参数量 | 4-bit 权重 $W$ | KV 余量 | KV 字节/token<br>(FP16, GQA-8, d=128) | 可承载上下文<br>(FP16 KV) | 可承载上下文<br>(int8 KV) | 判定结论 |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **7B / 8B** | $\approx 4.8\text{ GB}$ | $\approx 21.2\text{ GB}$ | 128 KB | **173.7K tokens** | 347.3K tokens | 达 256K **需 KV 量化** |
+| **14B** | $\approx 9.2\text{ GB}$ | $\approx 16.8\text{ GB}$ | 160 KB | **110.1K tokens** | 220.2K tokens | 达 128K **需 KV 量化** |
+| **32B** | $\approx 19.8\text{ GB}$ | $\approx 6.2\text{ GB}$ | 256 KB | **25.4K tokens** | 50.8K tokens | **常驻实用上限**；达 32K 需 KV 量化 |
+| **70B / 72B** | $\approx 42.0\text{ GB}$ | 负数 ($-16\text{ GB}$) | 320 KB | $0$ (直接 OOM) | $0$ (直接 OOM) | **不可常驻** (除非 2-bit 极端劣化至 22GB) |
+
+> **核算口径（必须随表声明）**：KV 字节/token = 层数 × KV head 数 × head_dim × 2 (K,V) × dtype 字节。
+> 例：8B（32 层, 8 KV head, d=128, FP16）= 32×8×128×2×2 = 131,072 B = **128 KB/token**。
+> 早期版本写作 "$>256\text{K}$ / $\approx128\text{K}$ / $\approx32\text{K}$" 但**未声明该假设**，核算后分别需要
+> **1.47× / 1.16× / 1.26×** 的 KV 压缩才成立。
 
 ---
 
@@ -55,8 +64,10 @@
 * **常驻物理内存占用方程**：
   $$\text{RAM}_{\text{Streaming}} = \text{RAM}_{\text{OS}} + 2 \times \text{Size}(\text{Layer}_i) + \text{Size}(\text{Centroid\_Index}) + \text{RAM}_{\text{Act\_Buffer}}$$
   * 70B 模型单层 4-bit 权重：$\approx 525\text{ MB}$ $\implies$ 双缓冲常驻仅需 $\approx 1.05\text{ GB}$。
-  * 405B 模型单层 4-bit 权重：$\approx 2.50\text{ GB}$ $\implies$ 双缓冲常驻仅需 $\approx 5.00\text{ GB}$。
-  * 32K 上下文 IFR 质心索引：$1024 \text{ 块} \times 2 \times 64 \times 4\text{ Bytes} \approx 512\text{ KB}$。
+  * 405B 模型单层 4-bit 权重：$\approx 1.6\text{ GB}$（405B×0.5B ÷ **126 层**） $\implies$ 双缓冲常驻约 $\approx 3.2\text{ GB}$。
+    * 注：Llama-3.1-405B 为 126 层；若按 80 层估算会得 2.5 GB/层（偏高 55%）。
+  * 32K 上下文 IFR 质心索引：$1024 \text{ 块} \times 2 \times 64 \times 4\text{ Bytes} \times 80\text{ 层} \times 8\text{ KV head} \approx \mathbf{320\text{ MB}}$（head_dim=128 时 $\approx 640\text{ MB}$）。
+    * ⚠️ **单层单 head 口径下的 512 KB 少算 640 倍**——该错误曾在本仓 Mac 仿真脚本中出现并被 OG 清单 T3.4 点名，勿在白皮书复现。
 
 * **理论极限结论**：
   在层间流式换页模式下，**模型大小不再受 32GB 宿主内存容量截断，其容量上限完全转化为 NVMe SSD 的可用物理磁盘空间**。
@@ -106,22 +117,39 @@ $$v_{\text{theoretical}} \le \frac{\text{BW}_{\text{effective}}}{W_{\text{active
 
 ---
 
+> **补充约束（此前遗漏）**：解码每 token 除读取活跃权重外，还必须取回被选中的 KV 块。
+> 70B / 32K 上下文 / top-64：$64\text{ 块} \times 32\text{ token} \times 320\text{ KB/token} = 640\text{ MB/token}$，
+> Mac NVMe 下另需 $\approx 160\text{ ms/token}$。
+> 本仓 Mac 仿真中的 `Retrieval Time 2.76 ms` **仅扫描质心索引，并未真实读取那 64 个 KV 块**，
+> 因此其 "Total Decode Step Overhead 280 ms" 同时漏掉了权重读取（$\approx 10\text{ s/token}$）与 KV 取回（$\approx 160\text{ ms/token}$）两项主导成本。
+
+---
+
 ## 4. 本地原型验证与专家审计准则 (Audit Verification Protocol)
 
-为杜绝“纸面空算”，本仓库提供可独立复现的测试 Harness 与微架构仿真脚本：
+为杜绝"纸面空算"，本仓库提供可独立复现的测试 Harness 与微架构仿真脚本。**但必须严格区分：以下输出是"脚本打印值"，不是端到端实测。**
 
-1. **层流式预取与常驻内存实测**：
+1. **层流式预取 Harness（代码路径可执行性验证）**：
    ```bash
    ./.venv/bin/python benchmarks/run_mac_layer_streaming_sim.py
    ```
-   *实测输出*：80 层流式预取换页延迟为 **228.3 ms**，单步峰值常驻内存稳定在 **< 4.5 GB**，证实 32GB 宿主机运行 70B 级流水线的可行性。
-2. **C++20 控制面纳秒级调度验证**：
+   *脚本打印值（非实测）*：80 层 `madvise` 换页调用耗时约 **228 ~ 280 ms**（本机复现 277.997 ms，随运行波动）；
+   `Peak Resident RAM < 4.5 GB` 为脚本内**写死的字符串，无 RSS 插桩**。
+   ⚠️ 该 Harness 的权重是 1 GB 稀疏文件、KV 是哑元字节、质心是随机 `randn`，**全程无 matmul / attention**，
+   既未读取 40 GB 权重（§3.2 判 ≈10 s/token），也未读取任何 KV 块（≈160 ms/token）。
+   **不可据此宣称"可行性"**——吞吐可行性只能由 §3.2 的理论边界判定。
+2. **C++20 控制面微基准**：
    ```bash
    ./build/main_bench
    ```
-   *实测输出*：10K 块背包求解用时 **91.96 µs**，CASA 零拷贝页表转换吞吐达 **10.39 亿次/秒**。
+   *脚本打印值*：10K 块背包求解 **91.96 µs**，页表转换吞吐 **10.39 亿次/秒**（仅控制面，非端到端）。
 
 ### 外部专家交叉验证清单 (Reviewer Audit Checklist)
 - [ ] **物理带宽自洽性**：检验公式 $v = \frac{\text{BW}}{W}$ 是否严格遵从底层总线带宽香农极限；
 - [ ] **常驻内存预算**：核查 OS 4GB + 框架 2GB 扣除后，物理页是否发生系统级 Swap Thrashing；
-- [ ] **CASA 256KB Super-Tile**：核对 NVMe I/O 是否对齐物理闪存 Block 粒度，消除小随机写惩罚。
+- [ ] **CASA 256KB Super-Tile**：核对 NVMe I/O 是否对齐物理闪存 Block 粒度，消除小随机写惩罚；
+- [ ] **KV 每 token 字节数核算**：是否按 层数 × KV head 数 × head_dim × 2 × dtype 计算，并据此反推可承载上下文（防 640× 少算）；
+- [ ] **索引体积是否乘了 层数 × KV head 数**；
+- [ ] **每 token 权重读取量 × (1/BW)** 是否与文中 tok/s 一致；
+- [ ] **"实测"与"脚本打印值"是否分开标注**，是否有 RSS 插桩；
+- [ ] **仿真是否包含真实 matmul 与真实 KV 块读取**（否则不能用于可行性判定）。
