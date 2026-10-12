@@ -246,7 +246,37 @@ void bench_ifr_lse(size_t num_candidates = 20000, size_t head_dim = 64) {
     std::cout << ">>> Top-" << top_k << " Unnormalized Ranking & Discarded Mass:\n";
     std::cout << "    Retained Candidates: " << top_indices.size() << "\n";
     std::cout << "    Discarded Attention Mass (rho): " << std::fixed << std::setprecision(4) << discarded_mass << "\n";
-    std::cout << "    Fidelity Cliff (< 0.365): " << (discarded_mass <= 0.365f ? "MAINTAINED" : "EXCEEDED") << "\n";
+    std::cout << "    Fidelity Cliff (< 0.365): " << (discarded_mass <= 0.365f ? "MAINTAINED" : "EXCEEDED") << "\n\n";
+
+    // 4. Decoupled Sub-Centroid Cosine Ranking Throughput (K=2 sub-centroids per block)
+    const size_t num_sub_blocks = 10000;
+    const size_t subs_per_block = 2;
+    std::vector<float> multi_sub_centroids(num_sub_blocks * subs_per_block * head_dim);
+    for (size_t i = 0; i < multi_sub_centroids.size(); ++i) {
+        multi_sub_centroids[i] = norm_dist(rng);
+    }
+    std::vector<size_t> top_cos_indices;
+    std::vector<float> top_cos_scores;
+    std::vector<double> cos_lats;
+    cos_lats.reserve(iters);
+
+    for (size_t it = 0; it < iters; ++it) {
+        const auto t0 = std::chrono::high_resolution_clock::now();
+        lse_engine.rank_subcentroids_cosine(
+            query.data(), multi_sub_centroids.data(), num_sub_blocks, subs_per_block, top_k,
+            top_cos_indices, top_cos_scores
+        );
+        const auto t1 = std::chrono::high_resolution_clock::now();
+        cos_lats.push_back(std::chrono::duration<double, std::micro>(t1 - t0).count());
+    }
+    const auto cos_stats = compute_stats(cos_lats);
+    const double cos_mops = (static_cast<double>(num_sub_blocks * subs_per_block) / cos_stats.mean_us);
+
+    std::cout << ">>> Decoupled Sub-Centroid Cosine Ranking (LSEEngine::rank_subcentroids_cosine):\n";
+    std::cout << "    10K Blocks x 2 Sub-Centroids (20K vectors, Top-" << top_k << "):\n";
+    std::cout << "    Mean Latency: " << cos_stats.mean_us << " us (" << (cos_stats.mean_us / 1000.0) << " ms)\n";
+    std::cout << "    Throughput:   " << std::fixed << std::setprecision(2) << cos_mops << " Million sub-centroids/sec\n";
+    std::cout << "    Top-1 Score:  " << std::fixed << std::setprecision(4) << top_cos_scores[top_cos_indices[0]] << "\n";
 }
 
 // -----------------------------------------------------------------------------
@@ -470,6 +500,43 @@ void verify_invariants() {
                   << (res_clamped.allocations[0].tier_name == "INT2" ? "PASS" : "FAIL") << ")\n";
         assert(std::abs(res_clamped.rho_floor - LADDER_FIDELITY_CLIFF) < 1e-9);
         assert(res_clamped.allocations[0].tier_name == "INT2");
+    }
+
+    // 4. Check Decoupled Sub-Centroid Cosine Ranking (T3.2 Audit Contract)
+    {
+        const size_t num_blocks = 4;
+        const size_t subs_per_block = 2;
+        const size_t head_dim = 4;
+        LSEEngine engine(head_dim);
+
+        // Query: [1, 0, 0, 0]
+        std::vector<float> query = {1.0f, 0.0f, 0.0f, 0.0f};
+
+        // Block 0: Sub0 [0.1, 0.9, 0, 0], Sub1 [0.2, 0.8, 0, 0]
+        // Block 1: Sub0 [0.95, 0.1, 0, 0], Sub1 [0.5, 0.5, 0, 0] (Strongest match!)
+        // Block 2: Sub0 [0.0, 1.0, 0, 0], Sub1 [0.0, 0.0, 1, 0]
+        // Block 3: Sub0 [0.7, 0.1, 0, 0], Sub1 [0.8, 0.2, 0, 0] (Second match!)
+        std::vector<float> sub_centroids = {
+            0.1f, 0.9f, 0.0f, 0.0f,   0.2f, 0.8f, 0.0f, 0.0f, // Block 0
+            0.95f, 0.1f, 0.0f, 0.0f,  0.5f, 0.5f, 0.0f, 0.0f, // Block 1
+            0.0f, 1.0f, 0.0f, 0.0f,   0.0f, 0.0f, 1.0f, 0.0f, // Block 2
+            0.7f, 0.1f, 0.0f, 0.0f,   0.8f, 0.2f, 0.0f, 0.0f  // Block 3
+        };
+
+        std::vector<size_t> top_indices;
+        std::vector<float> max_scores;
+        engine.rank_subcentroids_cosine(
+            query.data(), sub_centroids.data(), num_blocks, subs_per_block, 2,
+            top_indices, max_scores
+        );
+
+        std::cout << ">>> Decoupled Sub-Centroid Cosine Invariant Check (LSEEngine::rank_subcentroids_cosine):\n";
+        std::cout << "    Top-1 Block: " << top_indices[0] << " (Score: " << max_scores[top_indices[0]] << ", Expected: 1)\n";
+        std::cout << "    Top-2 Block: " << top_indices[1] << " (Score: " << max_scores[top_indices[1]] << ", Expected: 3)\n";
+        assert(top_indices[0] == 1);
+        assert(top_indices[1] == 3);
+        assert(max_scores[1] > 0.95f);
+        std::cout << "    Cosine Verification: PASS\n";
     }
 
     std::cout << "\n>>> ALL BIT-LEVEL INVARIANTS AND SPECIFICATIONS VERIFIED SUCCESSFULLY [OK]\n";

@@ -493,3 +493,46 @@ def test_needle_block_ivf_coarse_probe_recall():
     # The needle block must be routed and retrieved despite mean-K dilution
     assert "needle_target_atom" in probed_candidates, "Needle block was dropped by coarse IVF probe due to mean-K dilution!"
     print("\n✓ IVF Doublet Dual-Posting Confirmed: Coarse Voronoi routing successfully retrieves needle blocks.")
+
+
+def test_decoupled_subcentroid_cosine_ranking_invariants():
+    """
+    T3.2 Audit Contract:
+    Verify that multi-sub-centroid ranking in normalized cosine space:
+    max_{s in subs} (q / ||q||) . (sub_s / ||sub_s||)
+    correctly selects target blocks and matches C++ LSEEngine::rank_subcentroids_cosine invariant.
+    """
+    import subprocess
+    import os
+
+    dim = 64
+    num_blocks = 32
+    subs_per_block = 2
+    np.random.seed(123)
+
+    query = np.random.randn(dim).astype(np.float32)
+    q_norm = query / np.linalg.norm(query)
+
+    # Generate random sub-centroids
+    sub_centroids = np.random.randn(num_blocks, subs_per_block, dim).astype(np.float32)
+
+    # Invertible injection: place strong needle match at block 7, sub-centroid 1
+    sub_centroids[7, 1] = query * 2.5 + np.random.randn(dim).astype(np.float32) * 0.01
+
+    # Python Normalized Cosine Ranking
+    norms = np.linalg.norm(sub_centroids, axis=-1, keepdims=True) + 1e-12
+    normed_subs = sub_centroids / norms
+    cos_scores = np.einsum("bsd,d->bs", normed_subs, q_norm)
+    block_scores = np.max(cos_scores, axis=-1)
+    top_indices = np.argsort(-block_scores)
+
+    assert top_indices[0] == 7, "Block 7 with aligned sub-centroid must be ranked top-1!"
+    assert block_scores[7] > 0.99, "Normalized cosine score for aligned sub-centroid must be > 0.99!"
+
+    # Verify compiled C++ engine verification if binary is present
+    bin_path = os.path.join(os.path.dirname(__file__), "..", "build", "main_bench")
+    if os.path.exists(bin_path):
+        res = subprocess.run([bin_path, "--iterations", "1"], capture_output=True, text=True)
+        assert res.returncode == 0, f"C++ main_bench failed: {res.stderr}"
+        assert "Cosine Verification: PASS" in res.stdout, "C++ rank_subcentroids_cosine invariant check failed!"
+

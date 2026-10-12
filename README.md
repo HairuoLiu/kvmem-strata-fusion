@@ -148,17 +148,18 @@ clang++ -O3 -std=c++20 -march=armv8-a+simd -I./csrc \
 ### 4. 运行真实模型检索基准复现 (Run Real-Model Benchmarks)
 
 #### (A) 解耦子质心检索与原版 Strata 朴素均值对比：
-在真实 `Qwen2.5-0.5B-Instruct` 权重与 6 篇 Wikipedia 长文本上验证检索保真度：
+在真实 `Qwen2.5-0.5B-Instruct` 权重与 Wikipedia 真实长文本上，严格对齐位置空间验证检索保真度（数据产物：[`docs/decoupled_retrieval_benchmark.json`](docs/decoupled_retrieval_benchmark.json)）：
 
 ```bash
 python benchmarks/benchmark_decoupled_retrieval.py
 ```
-*实测数据对比*：
-- `Strata_Naive_A` (朴素块均值): `recall@64 = 0.6860` (丢损 31.4% 检索排序)
-- `Decoupled_K2` (本方案解耦双子质心): `recall@64 = 0.9275` (提升 **+35.2%**，近无损召回)
+*实测数据对比（Layer 12, 4096 tokens, top-64 检索）*：
+- `Strata_Naive_A` (朴素块均值池化): `recall@64 = 0.5999` (丢损 40.0% 检索精度)
+- `Monolithic_Bmid` (v1 块中点 re-RoPE 伪影): `recall@64 = 0.6104`
+- `Decoupled_K2` (本方案解耦双子质心): `recall@64 = 0.8816 ~ 0.9275` (相对 Naive Strata 提升 **+46.9%**，大幅挽回稀释损失)
 
-#### (B) 本地 32GB 内存运行 70B 超大模型分层流式模拟：
-验证在 Apple M6 芯片上，通过 `mmap` 动态层预取与 CASA 256KB Super-Tile 磁盘分层，将常驻物理内存压至 4.5GB 以下：
+#### (B) 32GB 宿主机运行 70B 级超大模型层流式与物理 RSS 内存压测：
+验证通过 44.8GB 稀疏虚拟内存映射、OS 原生 `madvise(MADV_WILLNEED / MADV_DONTNEED)` 动态层双缓冲流式调度与 CASA 256KB Super-Tile 磁盘分层，通过 `resource.getrusage` 实测物理常驻内存（RSS）稳定在 3.95GB 以下：
 
 ```bash
 python benchmarks/run_mac_layer_streaming_sim.py

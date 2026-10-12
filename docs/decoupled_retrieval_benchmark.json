@@ -1,0 +1,56 @@
+{
+  "timestamp": "2026-10-12 14:23:52 UTC",
+  "model_id": "Qwen/Qwen2.5-0.5B-Instruct",
+  "tokens": 4096,
+  "n_blocks": 128,
+  "mid_layer": 12,
+  "n_query": 64,
+  "top_k": 64,
+  "summary": {
+    "Strata_Naive_A": {
+      "mean_recall": 0.599853515625,
+      "se": 0.00806133652679321,
+      "ci_95": [
+        0.5840532960324853,
+        0.6156537352175147
+      ],
+      "gain_vs_strata_naive_pct": 0.0
+    },
+    "Monolithic_Bmid": {
+      "mean_recall": 0.6103515625,
+      "se": 0.007198354292804681,
+      "ci_95": [
+        0.5962427880861029,
+        0.6244603369138971
+      ],
+      "gain_vs_strata_naive_pct": 1.7501017501017502
+    },
+    "Monolithic_B_matched": {
+      "mean_recall": 1.0,
+      "se": 0.0,
+      "ci_95": [
+        1.0,
+        1.0
+      ],
+      "gain_vs_strata_naive_pct": 66.70736670736672
+    },
+    "Decoupled_K2": {
+      "mean_recall": 0.881591796875,
+      "se": 0.004259292480869226,
+      "ci_95": [
+        0.8732435836124963,
+        0.8899400101375037
+      ],
+      "gain_vs_strata_naive_pct": 46.96784696784697
+    },
+    "Decoupled_K4": {
+      "mean_recall": 0.849609375,
+      "se": 0.004777827209464777,
+      "ci_95": [
+        0.840244833669449,
+        0.858973916330551
+      ],
+      "gain_vs_strata_naive_pct": 41.63614163614164
+    }
+  }
+}
