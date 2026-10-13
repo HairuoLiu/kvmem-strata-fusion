@@ -37,8 +37,8 @@ def get_peak_rss_mb() -> float:
     return rss_raw / (1024.0 * 1024.0) if sys.platform == "darwin" else rss_raw / 1024.0
 
 
-def query_ollama(model_name: str, prompt: str, num_predict: int = 64) -> dict:
-    """Query local Ollama instance and extract real latency and token/s metrics."""
+def query_ollama(model_name: str, prompt: str, num_predict: int = 64, repeats: int = 5) -> dict:
+    """Query local Ollama instance with repeats, reporting mean and std of prompt/gen tok/s."""
     url = "http://127.0.0.1:11434/api/generate"
     payload = {
         "model": model_name,
@@ -46,58 +46,81 @@ def query_ollama(model_name: str, prompt: str, num_predict: int = 64) -> dict:
         "stream": False,
         "options": {
             "num_predict": num_predict,
+            "num_ctx": 4096,
             "temperature": 0.0
         }
     }
     data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
-    t0 = time.perf_counter()
-    with urllib.request.urlopen(req, timeout=120) as resp:
-        res = json.loads(resp.read().decode("utf-8"))
-    wall_time = time.perf_counter() - t0
     
-    prompt_tokens = res.get("prompt_eval_count", 0)
-    prompt_duration_ns = res.get("prompt_eval_duration", 1)
-    gen_tokens = res.get("eval_count", 0)
-    gen_duration_ns = res.get("eval_duration", 1)
+    prompt_speeds = []
+    gen_speeds = []
+    wall_times = []
+    total_durations = []
+    load_durations = []
+    prompt_tokens = 0
+    gen_tokens = 0
 
-    prompt_tok_per_sec = (prompt_tokens / (prompt_duration_ns / 1e9)) if prompt_duration_ns > 0 else 0.0
-    gen_tok_per_sec = (gen_tokens / (gen_duration_ns / 1e9)) if gen_duration_ns > 0 else 0.0
+    print(f"  -> Running {repeats} trials for {model_name}...")
+    for trial in range(repeats):
+        req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+        t0 = time.perf_counter()
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            res = json.loads(resp.read().decode("utf-8"))
+        wall_time = time.perf_counter() - t0
+        
+        prompt_tokens = res.get("prompt_eval_count", 0)
+        prompt_duration_ns = res.get("prompt_eval_duration", 1)
+        gen_tokens = res.get("eval_count", 0)
+        gen_duration_ns = res.get("eval_duration", 1)
+
+        p_spd = (prompt_tokens / (prompt_duration_ns / 1e9)) if prompt_duration_ns > 0 else 0.0
+        g_spd = (gen_tokens / (gen_duration_ns / 1e9)) if gen_duration_ns > 0 else 0.0
+
+        prompt_speeds.append(p_spd)
+        gen_speeds.append(g_spd)
+        wall_times.append(wall_time)
+        total_durations.append(res.get("total_duration", 0) / 1e9)
+        load_durations.append(res.get("load_duration", 0) / 1e9)
 
     return {
         "model": model_name,
-        "wall_time_s": wall_time,
+        "repeats": repeats,
         "prompt_tokens": prompt_tokens,
-        "prompt_tok_per_sec": prompt_tok_per_sec,
         "gen_tokens": gen_tokens,
-        "gen_tok_per_sec": gen_tok_per_sec,
-        "total_duration_s": res.get("total_duration", 0) / 1e9,
-        "load_duration_s": res.get("load_duration", 0) / 1e9,
+        "prompt_tok_per_sec_mean": float(np.mean(prompt_speeds)),
+        "prompt_tok_per_sec_std": float(np.std(prompt_speeds, ddof=1)) if repeats > 1 else 0.0,
+        "gen_tok_per_sec_mean": float(np.mean(gen_speeds)),
+        "gen_tok_per_sec_std": float(np.std(gen_speeds, ddof=1)) if repeats > 1 else 0.0,
+        "wall_time_s_mean": float(np.mean(wall_times)),
+        "load_duration_s_mean": float(np.mean(load_durations)),
+        "total_duration_s_mean": float(np.mean(total_durations)),
+        "is_measured": True
     }
 
 
-def run_tripartite_benchmark(model_id: str = "qwen2.5:0.5b", out_json: str = "docs/tripartite_comparison_benchmark.json"):
+def run_tripartite_benchmark(model_id: str = "qwen2.5:7b", out_json: str = "docs/tripartite_comparison_benchmark.json"):
     print("=" * 80)
-    print("TRIPARTITE HORIZONTAL BENCHMARK SUITE")
+    print("TRIPARTITE COMPARISON BENCHMARK SUITE (STRICT BASELINE MEASURED)")
     print(f"Host: {platform.system()} {platform.machine()} ({platform.processor() or 'Apple Silicon'})")
     print(f"Target Baseline Model: {model_id}")
-    print("Comparing: [1] Official Ollama  [2] Native Strata  [3] KVMem-Strata-Fusion")
+    print("Protocol: Baseline Measured via Ollama Metal (n=5); System 2 & 3 Annotated via Published Specs/Prototypes")
     print("=" * 80)
 
     # 1. Benchmark Official Ollama
     print("\n[Step 1/3] Benchmarking Official Ollama (Uncompressed Metal Baseline)...")
-    prompt_4k = "Analyze the fundamental tradeoffs in long-context transformer architectures. " * 80
+    prompt_text = "Analyze the fundamental tradeoffs in long-context transformer architectures. " * 80
     try:
-        ollama_res = query_ollama(model_id, prompt_4k, num_predict=64)
-        print(f"  -> Prompt Eval Speed: {ollama_res['prompt_tok_per_sec']:.2f} tokens/s ({ollama_res['prompt_tokens']} tokens)")
-        print(f"  -> Generation Speed:  {ollama_res['gen_tok_per_sec']:.2f} tokens/s ({ollama_res['gen_tokens']} tokens)")
-        print(f"  -> Wall Time:         {ollama_res['wall_time_s']:.2f} s")
+        ollama_res = query_ollama(model_id, prompt_text, num_predict=64, repeats=5)
+        print(f"  -> Prompt Eval Speed: {ollama_res['prompt_tok_per_sec_mean']:.2f} ± {ollama_res['prompt_tok_per_sec_std']:.2f} tokens/s ({ollama_res['prompt_tokens']} tokens)")
+        print(f"  -> Generation Speed:  {ollama_res['gen_tok_per_sec_mean']:.2f} ± {ollama_res['gen_tok_per_sec_std']:.2f} tokens/s ({ollama_res['gen_tokens']} tokens)")
+        print(f"  -> Wall Time:         {ollama_res['wall_time_s_mean']:.2f} s")
     except Exception as e:
-        print(f"  -> Ollama query failed ({e}), using default fallback baseline profile.")
+        print(f"  -> Ollama query failed ({e}), recording unmeasured baseline.")
         ollama_res = {
-            "prompt_tok_per_sec": 850.0,
-            "gen_tok_per_sec": 125.0,
-            "wall_time_s": 1.2
+            "model": model_id,
+            "repeats": 0,
+            "is_measured": False,
+            "error": str(e)
         }
 
     # 2. Load Empirical Retrieval Data from docs/decoupled_retrieval_benchmark.json
@@ -106,60 +129,59 @@ def run_tripartite_benchmark(model_id: str = "qwen2.5:0.5b", out_json: str = "do
         with open(retrieval_file) as f:
             ret_data = json.load(f)
         sum_data = ret_data.get("summary", {})
-        recall_strata = sum_data.get("Strata_Naive_A", {}).get("mean_recall", 0.6450)
+        recall_block_a = sum_data.get("Strata_Naive_A", {}).get("mean_recall", 0.6450)
+        recall_b_matched = sum_data.get("Monolithic_B_matched", {}).get("mean_recall", 0.9004)
         recall_fusion_k2 = sum_data.get("Decoupled_K2_Mean", {}).get("mean_recall", 0.9224)
         recall_fusion_k4 = sum_data.get("Decoupled_K4_Mean", {}).get("mean_recall", 0.9382)
     else:
-        recall_strata = 0.6450
+        recall_block_a = 0.6450
+        recall_b_matched = 0.9004
         recall_fusion_k2 = 0.9224
         recall_fusion_k4 = 0.9382
 
-    # 3. Construct Unified Tripartite Comparison Matrix
+    # 3. Construct Rigorous Tripartite Comparison Matrix
+    p_spd_str = f"{ollama_res['prompt_tok_per_sec_mean']:.1f} ± {ollama_res['prompt_tok_per_sec_std']:.1f} tok/s" if ollama_res.get("is_measured") else "N/A"
+    g_spd_str = f"{ollama_res['gen_tok_per_sec_mean']:.1f} ± {ollama_res['gen_tok_per_sec_std']:.1f} tok/s" if ollama_res.get("is_measured") else "N/A"
+
     matrix = {
         "system_1_official_ollama": {
             "name": "官方原生 Ollama (llama.cpp)",
-            "description": "标准 Metal GPU 原生推理，全量 FP16/BF16 KV 缓存，无块级稀疏压缩",
+            "status": "LIVE_MEASURED",
+            "description": "标准 Metal GPU 原生推理，全量稠密 KV 缓存，无块级稀疏压缩",
             "kv_compression_ratio": "1.0× (未压缩)",
-            "kv_footprint_10m": "324.0 GiB (全量膨胀)",
-            "kv_footprint_32k_fp16": "64.0 MB (单层) / 1.54 GB (7B 全网)",
-            "retrieval_recall_64": "1.0000 (基准，全量计算)",
-            "long_context_support": "受物理内存截断 (32GB 机器超过 64K 即 OOM)",
-            "io_granularity": "无磁盘换页 (纯显存/内存常驻)",
-            "io_bandwidth_util": "N/A (无异步换页机制)",
-            "control_plane_latency": "0.00 ms (直接连续显存矩阵算子)",
-            "measured_prompt_eval_tok_s": round(ollama_res["prompt_tok_per_sec"], 2),
-            "measured_generation_tok_s": round(ollama_res["gen_tok_per_sec"], 2),
-            "over_memory_70b_capable": "否 (43GB 权重在 32GB 机器上直接崩溃)"
+            "kv_footprint_10m": "全量线性增长 (受 RAM 物理截断)",
+            "retrieval_recall_64": "1.0000 (基准，全量注意力计算)",
+            "io_granularity": "无外存换页 (纯显存/内存常驻)",
+            "control_plane_latency": "0.00 ms (原生计算图直接派发)",
+            "measured_prompt_eval_tok_s": p_spd_str,
+            "measured_generation_tok_s": g_spd_str,
+            "over_memory_model_support": "不可行 (权重超出物理内存时直接 OOM)"
         },
         "system_2_native_strata": {
-            "name": "原版 Strata (OSDI '26 原生)",
-            "description": "HiRadix 前缀树 + GPU-assisted 128B 细粒度 I/O + 朴素旋转均值池化 (Naive Mean-K)",
-            "kv_compression_ratio": "1.0× (无 In-KV 阶梯量化，仅有延迟淘汰)",
-            "kv_footprint_10m": "324.0 GiB (存量未压缩)",
-            "kv_footprint_32k_fp16": "64.0 MB (单层) / 1.54 GB (7B 全网)",
-            "retrieval_recall_64": f"{recall_strata:.4f} (针尖稀释，丢损 35.5% 精度)",
-            "long_context_support": "延迟命中 (Delay-Hit)，受限于 Host 内存",
-            "io_granularity": "128 Byte 细粒度 (未对齐 SSD 物理块)",
-            "io_bandwidth_util": "7.8 GB/s (PCIe 5.0 利用率仅 22%，卡死在 I/O 悬崖)",
-            "control_plane_latency": "16.4 ms (Python 调度器 / 原位回填冲突)",
-            "measured_prompt_eval_tok_s": "受 7.8GB/s I/O 截断 (长上下文大幅衰减)",
-            "measured_generation_tok_s": "受 128B 随机队列延迟制约",
-            "over_memory_70b_capable": "否 (128B 细粒度导致 FTL 队列瘫痪)"
+            "name": "原版开源 Strata (Niko1221/Strata)",
+            "status": "OFFICIAL_PUBLISHED_SPEC",
+            "description": "专为 Qwen3.8-Flash-Next (125B MoE) 定制：VRAM 专家缓存 (4,105 槽) + CPU 原位线程池 + SSD 直接 I/O",
+            "kv_compression_ratio": "8-bit KV (4K 以上) + KV 流式分页 (64K 以上)",
+            "kv_footprint_10m": "324.0 GiB (无跨块阶梯深度压缩)",
+            "retrieval_recall_64": f"{recall_block_a:.4f} (对应块均值索引臂 BlockMean_A 保真度)",
+            "io_granularity": "QSA 4-cell 页表 (细粒度分页调度)",
+            "control_plane_latency": "C++ 异步图捕获与 CPU 专家线程池调度",
+            "measured_prompt_eval_tok_s": "官方标称 1,620 ~ 2,650 tok/s (RTX 5070 32K) / Mac 端依赖 Unified Memory",
+            "measured_generation_tok_s": "官方标称 53 ~ 94 tok/s (RTX 5070) / ~14 tok/s (Mac 32GB 流式)",
+            "over_memory_model_support": "支持 (32GB 机器支持 29.6GB Coder 剪枝版或 SSD 流式运行)"
         },
         "system_3_kvmem_strata_fusion": {
-            "name": "KVMem-Strata-Fusion (本架构)",
-            "description": "CASA (K-Freeze + 256KB Super-Tile) + IFR 解耦双子质心 + UBBA 背包 + LADDER 阶梯校准",
-            "kv_compression_ratio": "7.85× ~ 8.0× (Raw FP8 -> INT4 -> INT2 -> 跨块合并)",
-            "kv_footprint_10m": "42.0 GiB (显存/磁盘足迹压降 87.3%)",
-            "kv_footprint_32k_fp16": "8.1 MB (经 UBBA 背包压缩后仅占 12.7%)",
-            "retrieval_recall_64": f"{recall_fusion_k2:.4f} (K=2) / {recall_fusion_k4:.4f} (K=4) (+43.0%~45.5% 相对 Strata)",
-            "long_context_support": "超长有界视图 (已实测 128K~256K 极长上下文)",
-            "io_granularity": "256 KB Super-Tile 聚合 (对齐物理闪存 Block)",
-            "io_bandwidth_util": ">= 35.0 GB/s (实测 35.97 GB/s，跑满硬件吞吐)",
-            "control_plane_latency": "0.0698 ms ~ 0.0911 ms (C++20 SIMD 纳秒级引擎，SLA < 0.1ms)",
-            "measured_prompt_eval_tok_s": "消除 I/O 瓶颈，锁死硬件带宽理论上限",
-            "measured_generation_tok_s": "长上下文下吞吐比官方基线稳定 2.5×~3.8×",
-            "over_memory_70b_capable": "是 (44.8GB 稀疏虚拟内存 + 80 层双缓冲流式预取，常驻 < 4.0GB)"
+            "name": "KVMem-Strata-Fusion (本架构原型与设计)",
+            "status": "MICROBENCH_AND_SIMULATION",
+            "description": "CASA (规范原子 K-Freeze + 256KB Super-Tile) + IFR 解耦多子质心 + UBBA 背包 + LADDER 阶梯校准",
+            "kv_compression_ratio": "7.85× ~ 8.0× (基于合成验证与阶梯量化推导)",
+            "kv_footprint_10m": "42.0 GiB (紧凑存储，推导设计目标)",
+            "retrieval_recall_64": f"{recall_fusion_k2:.4f} (K=2) / {recall_fusion_k4:.4f} (K=4) [实测，内容空间代理真值]",
+            "io_granularity": "256 KB Super-Tile 聚合 (对齐物理闪存 Block 消除随机队列惩罚)",
+            "control_plane_latency": "Fast Path 69.8 ~ 106.8 µs (C++ POD)，General API 167 ~ 251 µs (单核微基准)",
+            "measured_prompt_eval_tok_s": "待端到端整机测量 (UNMEASURED)",
+            "measured_generation_tok_s": "层流式模拟下 ~27.1 s/tok (用于离线超大模型推理，非实时交互场景)",
+            "over_memory_model_support": "架构可行 (通过 44.8GB 虚拟映射 + 80 层双缓冲流式预取，物理常驻 RSS < 4.0GB)"
         }
     }
 
@@ -169,18 +191,16 @@ def run_tripartite_benchmark(model_id: str = "qwen2.5:0.5b", out_json: str = "do
     print("=" * 80)
 
     header = (
-        f"| 对比维度 | [1] 官方原生 Ollama | [2] 原版 Strata (OSDI '26) | [3] 本系统 KVMem-Strata-Fusion |\n"
+        f"| 对比维度 | [1] 官方原生 Ollama (实测) | [2] 原版开源 Strata (标称规格) | [3] 本系统 KVMem-Strata-Fusion (原型/设计) |\n"
         f"| :--- | :--- | :--- | :--- |\n"
-        f"| **底层核心机制** | 标准 Metal 全量自注意力 | HiRadix 前缀树 + 128B I/O | CASA 规范不可变原子 + 解耦子质心 |\n"
-        f"| **KV 物理存储压缩** | 1.0× (未压缩，纯线性增长) | 1.0× (存量未压缩) | **7.85× ~ 8.0× (压降 87.3%)** |\n"
-        f"| **10M 上下文存储足迹** | 324.0 GiB (直接 OOM) | 324.0 GiB (无存量削减) | **42.0 GiB (高紧凑驻留)** |\n"
-        f"| **检索排序保真度 (Recall@64)** | 1.0000 (全算基准) | {recall_strata:.4f} (丢损 35.5% 精度) | **{recall_fusion_k2:.4f} (K=2) / {recall_fusion_k4:.4f} (K=4)** |\n"
-        f"| **相对 Strata 召回提升** | 基线参考 | 基线 (+0.0%) | **+43.0% (K=2) / +45.5% (K=4)** |\n"
-        f"| **I/O 传输粒度与带宽** | 纯显存常驻 (不支持分页) | 128B 小块 (7.8 GB/s 悬崖) | **256KB Super-Tile (实测 35.97 GB/s)** |\n"
-        f"| **控制面调度延迟** | 0 ms (原生 GEMM) | 16.4 ms (Python 调度) | **0.0698 ms (C++20 SIMD，<0.1ms SLA)** |\n"
-        f"| **32GB 机器跑 70B 超大模型** | ❌ 崩溃 (43GB 无法常驻) | ❌ 瘫痪 (小块 FTL 随机死锁) | **✅ 成功 (双缓冲流式预取，RSS < 4.0GB)** |\n"
-        f"| **Prompt 预填充吞吐 (4K)** | {ollama_res['prompt_tok_per_sec']:.1f} tok/s | 随 I/O 读放大严重下滑 | 保持理论计算峰值利用率 |\n"
-        f"| **自回归解码速度** | {ollama_res['gen_tok_per_sec']:.1f} tok/s | 长文本下因 I/O 腰斩 | **长文本下消除 KV 访存堵塞，稳定锁死上限** |"
+        f"| **系统定位与模型基座** | 通用工业级 LLM 引擎 | 专为 Qwen3.8-Flash-Next 消费级定制 | 通用长上下文 KV 规范化存储体系 |\n"
+        f"| **KV 物理存储压缩** | 1.0× (未压缩，显存线性暴涨) | 8-bit KV (4K+) + 流式 (64K+) | **7.85× ~ 8.0× (基于阶梯量化推导)** |\n"
+        f"| **检索排序保真度 (Recall@64)** | 1.0000 (全算基准) | {recall_block_a:.4f} (BlockMean_A 均值池化) | **{recall_fusion_k2:.4f} (K=2) / {recall_fusion_k4:.4f} (K=4) [内容代理]** |\n"
+        f"| **I/O 传输粒度与调度** | 无外存分页换入换出 | QSA 4-cell 页表细粒度调度 | **256KB Super-Tile 聚合 (对齐物理闪存 Block)** |\n"
+        f"| **控制面调度延迟** | 0.00 ms (直接原生 GEMM 算子) | C++ 异步图与 CPU 线程池 | **Fast Path 69.8~106.8 µs / General 167~251 µs (单核微基准)** |\n"
+        f"| **32GB 机器运行 70B/125B** | ❌ 崩溃 (全量无法常驻直接 OOM) | ⚠️ 支持 Coder 剪枝版 (29.6GB) 或 SSD 流式 | **✅ 架构可行 (层流式预取，常驻 RSS < 4.0GB)** |\n"
+        f"| **Prompt 预填充吞吐** | {p_spd_str} | 官方标称 1,620 ~ 2,650 tok/s (RTX 5070 32K) | 待整机端到端全量测量 (UNMEASURED) |\n"
+        f"| **自回归生成速度** | {g_spd_str} | 官方标称 53 ~ 94 tok/s / ~14 tok/s (Mac 流式) | **层流式模拟 ~27.1 s/tok (离线推理，非日常交互)** |"
     )
     print(header)
 

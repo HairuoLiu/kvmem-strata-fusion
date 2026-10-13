@@ -193,20 +193,21 @@ python benchmarks/run_mac_layer_streaming_sim.py
 *注：KVMem-Strata-Fusion 算法将 32K~128K 场景下的 KV Cache 传输流量削减 85% 以上，确保在长上下文下不挤占权重流式 I/O 通道，锁死上述理论上限。*
 
 ### 6. 三系统全维度横向基准对比 (Tripartite Horizontal Comparison)
- 
- 为直观展示系统优化幅度，本仓库在 Apple M6 硬件宿主机上，对**官方原生 Ollama (llama.cpp)**、**原版开源 Strata (https://github.com/Niko1221/Strata，23.6k⭐ 开源 C++ Qwen3.8-Flash-Next 推理引擎)** 以及 **KVMem-Strata-Fusion (本架构)** 进行了三方全维度实测与横向架构剖析（数据产物：[`docs/tripartite_comparison_benchmark.json`](docs/tripartite_comparison_benchmark.json)，详见 [`docs/tripartite_comparison_benchmark.md`](docs/tripartite_comparison_benchmark.md)）：
- 
- | 对比维度 | [1] 官方原生 Ollama (llama.cpp) | [2] 原版开源 Strata (Niko1221/Strata) | [3] 本系统 KVMem-Strata-Fusion | 优化突破幅度 |
- | :--- | :--- | :--- | :--- | :--- |
- | **系统定位与模型基座** | 工业级通用 LLM 引擎 (全量稠密运算) | 专为 Qwen3.8-Flash-Next (125B MoE) 消费级 PC 部署定制 | 统一通用超长上下文 (32K~10M) KV 规范化存储体系 | 支持从 7B 稠密到 125B MoE 全系列模型 |
- | **显存调度与权重层流** | 纯内存/显存全量常驻，超显存溢出即崩 | 动态 VRAM 专家缓存 (4,105 槽) + 内存 CPU 算子 + SSD 直接 I/O (`--ple-io direct`) | 44.8GB 虚拟映射 + 80层双缓冲流水线 (`madvise` OS 异步预取) | 理论上限由 NVMe 决定，常驻 RSS < 4.0GB |
- | **KV 缓存压缩机制** | **1.0× (未压缩)**，显存随上下文线性暴涨 | 8-bit KV (4K 以上) + KV 流式分页 (64K 以上) | **CASA 规范不可变原子 + LADDER 阶梯量化 (8.0×)** | **物理足迹压缩 87.3%**，节省 >280 GiB (10M ctx) |
- | **KV 块检索与块管理** | 全量注意力计算 (不分页检索) | QSA 稀疏注意力 (4-token indexer cell + Top-K 收集) | IFR 解耦多子质心 (m=2/4) + UBBA 动态背包求解 | **Recall@64 从 0.6450 提升至 0.9224 ~ 0.9382** |
- | **I/O 传输粒度与调度** | 无外存分页换入换出 | 细粒度分页换页 (PCIe 随机小包易遇 7.8 GB/s 瓶颈) | **256KB Super-Tile 聚合** | **对齐闪存 FTL Block，跑满 35.97 GB/s 带宽** |
- | **控制面调度延迟** | 0.00 ms (直接原生连续算子) | C++ 异步图捕获与 CPU 专家线程池 | **0.0698 ms ~ 0.0911 ms (C++20 SIMD)** | 严格满足实时 SLA (< 0.1ms)，控制面无抖动 |
- | **32GB 机器运行 70B~125B** | ❌ **崩溃** (43GB 无法常驻) | ⚠️ **仅支持 Coder 剪枝版 (29.6GB) 或低 RAM 模式** | **✅ 理论与模拟均支持** (层流式预取，RSS 稳定在 3.95GB) | 突破硬件瓶颈，支持满血超大模型深度运行 |
- | **Prompt 预填充吞吐** | 实测 434.7 tok/s (7B) / 8478.5 tok/s (0.5B) | 标称 1,620 ~ 2,650 tok/s (RTX 5070 32K) | 消除 I/O 停顿，长文档下计算单元利用率更稳 | 32K~128K 窗口下吞吐不退化 |
- | **自回归生成速度** | 实测 26.3 tok/s (7B) | 标称 53 ~ 94 tok/s (RTX 5070) / ~14 tok/s (Mac M4) | **削减 85% 以上 KV 传输流量，锁死带宽理论上限** | 彻底消除长文本 KV 搬运对总线的挤占 |
+
+为直观展示系统优化幅度，本仓库在 Apple M6 硬件宿主机上，对**官方原生 Ollama (llama.cpp 实测基线)**、**原版开源 Strata (https://github.com/Niko1221/Strata，23.6k⭐ 官方标称规格)** 以及 **KVMem-Strata-Fusion (本架构原型与模拟)** 进行了三方全维度实测与横向架构剖析（数据产物：[`docs/tripartite_comparison_benchmark.json`](docs/tripartite_comparison_benchmark.json)，详见 [`docs/tripartite_comparison_benchmark.md`](docs/tripartite_comparison_benchmark.md)）：
+
+| 对比维度 | [1] 官方原生 Ollama (实测基线) | [2] 原版开源 Strata (官方标称规格) | [3] 本系统 KVMem-Strata-Fusion (原型与模拟) | 科学说明与工程评价 |
+| :--- | :--- | :--- | :--- | :--- |
+| **系统定位与模型基座** | 工业级通用 LLM 引擎 (全量稠密运算) | 专为 Qwen3.8-Flash-Next (125B MoE) 消费级 PC 部署定制 | 统一通用超长上下文 (32K~10M) KV 规范化存储体系 | 支持从 7B 稠密到 125B MoE 全系列模型 |
+| **显存调度与权重层流** | 纯内存/显存全量常驻，超显存溢出即崩 | 动态 VRAM 专家缓存 (4,105 槽) + 内存 CPU 算子 + SSD 直接 I/O (`--ple-io direct`) | 44.8GB 虚拟映射 + 80层双缓冲流水线 (`madvise` OS 异步预取) | 理论上限由 NVMe 决定，原型实测常驻 RSS < 4.0GB |
+| **KV 物理存储压缩倍率** | **1.0× (未压缩)**，显存随上下文线性暴涨 | 8-bit KV (4K 以上) + KV 流式分页 (64K 以上) | **CASA 规范不可变原子 + LADDER 阶梯量化 (8.0×)** | 基于合成自洽与阶梯量化推导，待端到端大模型实测确认 |
+| **10M 上下文存储足迹** | 全量线性增长 (受 RAM 物理截断) | 324.0 GiB (无跨块深度阶梯量化) | **42.0 GiB (紧凑常驻，推导目标)** | 节省超过 280 GiB 物理存储空间 |
+| **检索排序保真度 (Recall@64)** | 1.0000 (全算基准) | **0.6450** (BlockMean_A 均值池化实测) | **0.9224 (K=2) / 0.9382 (K=4)** | **实测（内容空间代理真值），相对朴素均值提升 +43.0% ~ +45.5%** |
+| **I/O 传输粒度与调度** | 无外存分页换入换出 | QSA 4-cell 页表细粒度调度 (PCIe 随机小包易遇 7.8 GB/s 瓶颈) | **256KB Super-Tile 聚合** | **对齐闪存 FTL Block 消除随机队列惩罚；C++ 测得连续内存算位宽 35.8~49.4 GB/s** |
+| **控制面调度延迟** | 0.00 ms (直接原生连续算子) | C++ 异步图捕获与 CPU 专家线程池调度 | **Fast Path 69.8~106.8 µs / General 167~251 µs** | 单核微基准测得，Fast Path 在 100µs SLA 边界波动 |
+| **32GB 机器跑 70B~125B** | ❌ **崩溃** (全量无法常驻直接 OOM) | ⚠️ **仅支持 Coder 剪枝版 (29.6GB) 或 SSD 流式** | **✅ 架构可行** (层流式预取，原型实测常驻 RSS < 4.0GB) | 突破物理内存约束，从“完全不可跑”变为“可运行” |
+| **Prompt 预填充吞吐** | 实测 **21,659.3 ± 11,687.4 tok/s** (7B, n=5) | 官方标称 1,620 ~ 2,650 tok/s (RTX 5070 32K) | **待整机端到端全量测量 (UNMEASURED)** | 消除 I/O 停顿，长文档下计算单元利用率更稳 |
+| **自回归生成速度** | 实测 **29.5 ± 0.4 tok/s** (7B, n=5) | 官方标称 53 ~ 94 tok/s (RTX 5070) / ~14 tok/s (Mac M4) | **层流式模拟下 ~27.1 s/tok (用于离线超大模型推理)** | 层流式牺牲速度换取超大模型驻留，不适合日常秒级交互 |
 
 ```bash
 # 本地一键复现三系统横向基准对比：
