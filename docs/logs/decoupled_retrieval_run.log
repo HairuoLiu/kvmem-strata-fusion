@@ -1,0 +1,23 @@
+/Users/hai/workspaces/kvmem-strata-fusion/.venv/lib/python3.9/site-packages/urllib3/__init__.py:35: NotOpenSSLWarning: urllib3 v2 only supports OpenSSL 1.1.1+, currently the 'ssl' module is compiled with 'LibreSSL 2.8.3'. See: https://github.com/urllib3/urllib3/issues/3020
+  warnings.warn(
+===========================================================================
+Decoupled Retrieval Benchmark on Qwen/Qwen2.5-0.5B-Instruct
+Ground Truth: Exact Token-Level Mean-of-Cosine Attention (Mean-of-Cos)
+===========================================================================
+  [warn] 'Kv cache' unavailable and not cached
+  [warn] 'Paged attention' unavailable and not cached
+[Corpus] Wikipedia extracts (6 articles, 0 fresh), round-robin interleaved at 2200-char segments | Tokens: 4096 | Blocks: 128
+
+===========================================================================
+Empirical Results on Layer 12 (n=64 queries, top-64 retrieval):
+===========================================================================
+  Strata_Naive_A         : recall@64 = 0.6450 (95% CI: [0.6316, 0.6584])  Gain: +0.00%
+  Monolithic_Bmid        : recall@64 = 0.6042 (95% CI: [0.5884, 0.6201])  Gain: -6.32%
+  Monolithic_B_matched   : recall@64 = 0.9004 (95% CI: [0.8918, 0.9090])  Gain: +39.59%
+  Decoupled_K2_Mean      : recall@64 = 0.9224 (95% CI: [0.9155, 0.9292])  Gain: +43.00%
+  Decoupled_K2_Max       : recall@64 = 0.8660 (95% CI: [0.8572, 0.8748])  Gain: +34.25%
+  Decoupled_K4_Mean      : recall@64 = 0.9382 (95% CI: [0.9328, 0.9437])  Gain: +45.46%
+  Decoupled_K4_Max       : recall@64 = 0.8369 (95% CI: [0.8291, 0.8448])  Gain: +29.75%
+  Random_Baseline        : recall@64 = 0.4910 (95% CI: [0.4812, 0.5007])  Gain: -23.88%
+
+[SAVED] Benchmark audit artifact written to: docs/decoupled_retrieval_benchmark.json

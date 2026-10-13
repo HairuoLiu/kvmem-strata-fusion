@@ -1,0 +1,115 @@
+===========================================================================
+   KVMEM STRATA FUSION - TRACK B C++ HIGH PERFORMANCE ENGINE BENCHMARK     
+===========================================================================
+
+===========================================================================
+  6. Bit-Level Mathematical Verification & Invariant Checks
+===========================================================================
+>>> RoPE Algebraic Invariance: (R_m q)^T (R_n k) == q^T R_{m-n} k:
+    Direct Dot:  26.068331
+    Remap Dot:   26.068331
+    Difference:  0 (Machine Epsilon < 1e-6: PASS)
+
+>>> UBBA Softmax Tier Bias: b_t = -(rho_t * s)^2 / 2:
+    Expected:   -0.20132683
+    Computed:   -0.20132683
+    Difference: 0 (Match: PASS)
+
+>>> UBBA Fidelity Cliff Clamping:
+    Configured rho_floor: 0.50 | Clamped rho_floor: 0.365
+    Selected Tier: INT2 (Expected INT2, MERGED blocked: PASS)
+>>> Decoupled Sub-Centroid Cosine Invariant Check (LSEEngine::rank_subcentroids_cosine):
+    Top-1 Block: 1 (Score: 0.99450541, Expected: 1)
+    Top-2 Block: 3 (Score: 0.98994946, Expected: 3)
+    Cosine Verification: PASS
+
+>>> ALL BIT-LEVEL INVARIANTS AND SPECIFICATIONS VERIFIED SUCCESSFULLY [OK]
+
+===========================================================================
+  1. UBBA Solver Benchmark (Target < 0.1ms for 10K blocks)
+===========================================================================
+Configuration: 10000 blocks, target coverage = 14344.28 (70%), rho_floor = 0.10
+Running 50 benchmark iterations...
+
+>>> UBBA General API (BlockCandidate vector):
+    Mean:    167.12 us (0.17 ms)
+    Median:  128.94 us
+    Min:     108.67 us
+    Max:     510.42 us
+    P95:     375.29 us
+    Feasible: YES | Blocks selected: 2883/10000 | Max rho: 0.01 <= 0.10
+
+>>> UBBA Fast Path (FastBlockCandidate POD):
+    Mean:     69.85 us (0.07 ms)
+    Median:   68.96 us
+    Min:      68.17 us
+    Max:      88.67 us
+    P95:      78.04 us
+    Feasible: YES | Bytes allocated: 2883 KB | Shadow Price: 633.65
+
+>>> LATENCY SLA STATUS (< 0.1ms / 100us for 10K blocks): PASSED [OK] (69.85 us = 0.07 ms)
+
+===========================================================================
+  2. UBBA Scaling Sweep (1K -> 50K Blocks)
+===========================================================================
+Blocks      Latency (us)    Latency (ms)    Selected        Throughput (M/s)
+---------------------------------------------------------------------------
+1000        7.05            0.0070          484             141.91          
+2000        13.16           0.0132          954             151.92          
+5000        33.59           0.0336          2370            148.87          
+10000       71.91           0.0719          4758            139.06          
+20000       141.90          0.1419          9457            140.94          
+50000       349.75          0.3498          23709           142.96          
+
+===========================================================================
+  3. IFR LSE Engine & ARM Neon Vectorized Retrieval
+===========================================================================
+Candidates: 20000 | Head Dim: 64
+>>> Vectorized Logit Dot-Product:
+    Mean Latency: 54.99 us (0.05 ms)
+    Throughput:   363.70 Million dot-products/sec
+
+>>> Numerically Stable Log-Sum-Exp Reduction:
+    LSE: 10.29 | Z: 29492.97
+    Mean Latency: 29.52 us
+
+>>> Top-64 Unnormalized Ranking & Discarded Mass:
+    Retained Candidates: 64
+    Discarded Attention Mass (rho): 0.9648
+    Fidelity Cliff (< 0.365): EXCEEDED
+
+>>> Decoupled Sub-Centroid Cosine Ranking (LSEEngine::rank_subcentroids_cosine):
+    10K Blocks x 2 Sub-Centroids (20K vectors, Top-64):
+    Mean Latency: 101.2359 us (0.1012 ms)
+    Throughput:   197.56 Million sub-centroids/sec
+    Top-1 Score:  0.5185
+
+===========================================================================
+  4. IFR Anti-Collapse Dispersion & Doublet Splitting
+===========================================================================
+Evaluating 2000 blocks (64000 tokens), Threshold = 0.85
+>>> Anti-Collapse Dispersion Results:
+    Detected Splits: 2000 (Expected ~400)
+    Total Latency:   1.9609 ms
+    Per-Block Time:  0.9805 us (1019.9310 blocks/ms)
+
+===========================================================================
+  5. CASA Zero-Copy Paged Block Table & Tensor Core Tile Evaluation
+===========================================================================
+Allocated and mapped 512 physical pages (16384 tokens).
+>>> Zero-Copy Page Table Address Translation:
+    Lookups:  1000000 in 0.9123 ms
+    Speed:    1096.09 Million zero-copy translations/sec (checksum: valid)
+
+>>> PagedAttention Zero-Copy GEMM Tile Performance:
+    Active Tokens:       16384
+    Mean Tile Latency:   218.28 us (0.22 ms)
+    Effective Bandwidth: 35.79 GB/s
+
+>>> Big-Tile Coalescing for GPUDirect Storage (GDS / cuFile):
+    Formed 32 Super-Tiles from 512 logical blocks.
+    Tile size: 256 KB (>= 64 KB saturation requirement met: YES)
+
+===========================================================================
+  Benchmark Run Complete
+===========================================================================

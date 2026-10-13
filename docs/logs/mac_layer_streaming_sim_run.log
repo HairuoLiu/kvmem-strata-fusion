@@ -1,0 +1,24 @@
+===========================================================================
+PHASE 2 & PHASE 3: 70B SCALE LAYER-STREAMING & I/O HIERARCHY BENCHMARK
+Host Environment: Darwin arm64 (arm) | OS: macOS-27.0.1-arm64-arm-64bit
+===========================================================================
+
+[1] Initializing Layer-by-Layer Weight Streamer (70B Model, 80 Layers)...
+    -> Virtual Weight Size:        43.75 GB mapped via sparse mmap
+    -> Active Double-Buffer Window: ~1.12 GB (Layer i compute + Layer i+1 prefetch)
+
+[2] Initializing Decoupled CASA Super-Tile NVMe KV Engine...
+    -> Context Length:             32768 tokens (1024 blocks of 32 tokens)
+    -> Full 70B Model (80L x 8H) Uncompressed KV on NVMe: 10.00 GB
+    -> Layer-0 Written to NVMe:    1024 blocks in 512 256KB Super-Tiles (75.14 ms)
+    -> Pinned DRAM Sub-Centroid Index: 1024.00 KB (Per-layer slice)
+    -> Full 80-Layer Sub-Centroid DRAM Index: 80.00 MB (< 0.3% of 32GB RAM)
+
+[3] Executing Simulated Next-Token Decode Step with Dynamic Paging...
+    -> Sub-Centroid Coarse Ranking Latency (Top-64): 5.595 ms
+    -> Measured 8-Layer Stream Latency:            2710.674 ms (338.83 ms/layer)
+    -> Projected 80-Layer Pipelined Stream Latency:  27106.737 ms
+    -> Total Projected Decode Step Overhead:         27112.331 ms
+    -> Real Measured Peak RSS (ru_maxrss):           3947.25 MB (Physical RAM)
+
+[VERIFIED] System I/O Paging & RSS Memory Budget verified on current host.
