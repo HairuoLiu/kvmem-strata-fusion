@@ -162,7 +162,7 @@ The external audit evaluated top-64 retrieval ranking against uncompressed Mean-
 
 **Core Scientific Finding & Causal Decomposition**:
 1. **RoPE Handling (+0.254)**: Removing position contamination before averaging yields the largest single fidelity gain ($0.6367 \to 0.8913$).
-2. **Sub-Centroid Resolution (+0.044)**: Expanding from $m=1$ to $m=4$ sub-centroids per block further pushes recall from $0.8913 \to 0.9350$.
+2. **Sub-Centroid Resolution (+0.022 ~ +0.038)**: Expanding from $m=1$ to $m=2$ and $m=4$ sub-centroids per block yields monotonic recall gains under mean-pooling ($0.9004 \to 0.9224 \to 0.9382$), while max-pooling exhibits false-positive saturation ($K_2\text{-Max}=0.8660 > K_4\text{-Max}=0.8369$), confirming that continuous block partitioning preserves contiguous semantic coherence.
 3. **Relocation Penalty (-0.31)**: Compacting blocks across large offsets ($\Delta=2048$) penalizes uncalibrated retrieval ($0.877 \to 0.563$).
 
 **Architectural Adaptation (The 4 Upgrades)**:

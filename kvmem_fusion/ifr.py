@@ -367,36 +367,28 @@ class IFRRetriever:
         meta["candidate_count"] = float(len(candidate_ids))
 
         # Build candidate representations (including doublet needle vectors if split)
-        cand_keys = []
-        cand_mapping = []
-
+        # Using block-level score aggregation: compute scores for each sub-centroid, then aggregate per block (mean or max)
+        block_sub_scores = {bid: [] for bid in candidate_ids}
         for bid in candidate_ids:
             blk = self.blocks[bid]
             is_split, sub_centroids = self.index.anti_collapse.inspect_and_split(blk)
             if is_split:
                 for sc in sub_centroids:
-                    cand_keys.append(sc)
-                    cand_mapping.append(bid)
+                    sc_logit = float(self.lse_tracker.compute_logits(query, np.array([sc]))[0])
+                    block_sub_scores[bid].append(sc_logit)
             else:
-                cand_keys.append(blk.mean_k)
-                cand_mapping.append(bid)
+                blk_logit = float(self.lse_tracker.compute_logits(query, np.array([blk.mean_k]))[0])
+                block_sub_scores[bid].append(blk_logit)
 
-        cand_keys_arr = np.array(cand_keys)
-        cand_logits = self.lse_tracker.compute_logits(query, cand_keys_arr)
+        # Aggregate block scores: mean pooling preserves whole-block content fidelity without false-positive inflation
+        block_final_scores = []
+        for bid in candidate_ids:
+            scores = block_sub_scores[bid]
+            block_final_scores.append((bid, float(np.mean(scores))))
 
-        # Rank unnormalized logits
-        top_cand_indices = self.lse_tracker.rank_unnormalized(cand_logits, min(len(cand_logits), self.target_top_k * 2))
-
-        # De-duplicate block_ids while preserving ranking order
-        selected_set = set()
-        selected_blocks = []
-        for c_idx in top_cand_indices:
-            bid = cand_mapping[c_idx]
-            if bid not in selected_set:
-                selected_set.add(bid)
-                selected_blocks.append(bid)
-                if len(selected_blocks) >= self.target_top_k:
-                    break
+        # Sort blocks by aggregated score descending
+        block_final_scores.sort(key=lambda x: x[1], reverse=True)
+        selected_blocks = [x[0] for x in block_final_scores[:self.target_top_k]]
 
         selected_indices_in_all = np.array([block_ids.index(bid) for bid in selected_blocks])
         meta["discarded_mass"] = self.lse_tracker.compute_discarded_mass(

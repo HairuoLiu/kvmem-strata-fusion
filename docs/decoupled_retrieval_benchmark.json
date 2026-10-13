@@ -6,7 +6,7 @@
   "mid_layer": 12,
   "n_query": 64,
   "top_k": 64,
-  "ground_truth_definition": "mean_t cos(q_de, k_de(t)) [exact token-level attention]",
+  "ground_truth_definition": "mean_t cos(q_de, k_de(t)) [content-space similarity proxy, NOT attention]",
   "summary": {
     "Strata_Naive_A": {
       "mean_recall": 0.64501953125,

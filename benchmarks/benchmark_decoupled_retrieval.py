@@ -173,7 +173,7 @@ def run_decoupled_benchmark(max_len: int = 4096, topk: int = 64, n_query: int = 
         "mid_layer": mid_layer,
         "n_query": len(q_positions),
         "top_k": k,
-        "ground_truth_definition": "mean_t cos(q_de, k_de(t)) [exact token-level attention]",
+        "ground_truth_definition": "mean_t cos(q_de, k_de(t)) [content-space similarity proxy, NOT attention]",
         "summary": {k: {kk: vv for kk, vv in v.items() if kk != "raw_scores"} for k, v in summary.items()}
     }
     os.makedirs(os.path.dirname(out_json), exist_ok=True)

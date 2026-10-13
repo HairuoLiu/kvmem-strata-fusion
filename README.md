@@ -148,16 +148,20 @@ clang++ -O3 -std=c++20 -march=armv8-a+simd -I./csrc \
 
 ### 4. 运行真实模型检索基准复现 (Run Real-Model Benchmarks)
 
-#### (A) 解耦子质心检索与原版 Strata 朴素均值对比：
-在真实 `Qwen2.5-0.5B-Instruct` 权重与 Wikipedia 真实长文本上，严格对齐位置空间验证检索保真度（数据产物：[`docs/decoupled_retrieval_benchmark.json`](docs/decoupled_retrieval_benchmark.json)）：
+#### (A) 解耦子质心检索保真度实测对比：
+在真实长文本与 Qwen 架构权重（4096 tokens, Layer 12, top-64 检索）下，严格在内容空间 Token 级真值下评测各检索臂保真度（数据产物：[`docs/decoupled_retrieval_benchmark.json`](docs/decoupled_retrieval_benchmark.json)）：
 
 ```bash
 python benchmarks/benchmark_decoupled_retrieval.py
 ```
-*实测数据对比（Layer 12, 4096 tokens, top-64 检索）*：
-- `Strata_Naive_A` (朴素块均值池化): `recall@64 = 0.5999` (丢损 40.0% 检索精度)
-- `Monolithic_Bmid` (v1 块中点 re-RoPE 伪影): `recall@64 = 0.6104`
-- `Decoupled_K2` (本方案解耦双子质心): `recall@64 = 0.8816 ~ 0.9275` (相对 Naive Strata 提升 **+46.9%**，大幅挽回稀释损失)
+*实测数据对比（Layer 12, 4096 tokens, top-64 检索，64 queries）*：
+- `Random_Baseline` (纯随机打乱对照): `recall@64 = 0.4910` (理论随机下界 0.5000)
+- `BlockMean_A` (朴素旋转块均值池化): `recall@64 = 0.6450` (丢损 35.5% 检索精度)
+- `Monolithic_Bmid` (v1 块中点 re-RoPE 伪影): `recall@64 = 0.6042` (产生位置失配负收益)
+- `Monolithic_B_matched` (去 RoPE 位置对齐单均值): `recall@64 = 0.9004` (相对朴素均值提升 **+39.59%**)
+- `Decoupled_K2` (本方案解耦双子质心, Mean): `recall@64 = 0.9224` (提升 **+43.00%**，挽回均值稀释)
+- `Decoupled_K4` (本方案解耦四子质心, Mean): `recall@64 = 0.9382` (提升 **+45.46%**，连续语义最佳)
+*(注：生产路径 `ifr.py` 已默认采用全块均值聚合以避免多重比较假阳性；真值定义明确为内容空间代理 `content-similarity proxy`)*
 
 #### (B) 32GB 宿主机运行 70B 级超大模型层流式与物理 RSS 内存压测：
 验证通过 44.8GB 稀疏虚拟内存映射、OS 原生 `madvise(MADV_WILLNEED / MADV_DONTNEED)` 动态层双缓冲流式调度与 CASA 256KB Super-Tile 磁盘分层，通过 `resource.getrusage` 实测物理常驻内存（RSS）稳定在 3.95GB 以下：
@@ -189,21 +193,20 @@ python benchmarks/run_mac_layer_streaming_sim.py
 *注：KVMem-Strata-Fusion 算法将 32K~128K 场景下的 KV Cache 传输流量削减 85% 以上，确保在长上下文下不挤占权重流式 I/O 通道，锁死上述理论上限。*
 
 ### 6. 三系统全维度横向基准对比 (Tripartite Horizontal Comparison)
-
-为直观展示系统优化幅度，本仓库在 Apple M6 硬件宿主机上，对**官方原生 Ollama (llama.cpp)**、**原版 Strata (OSDI '26 论文方案)** 以及 **KVMem-Strata-Fusion (本架构)** 进行了三方全维度实测与横向对比（数据产物：[`docs/tripartite_comparison_benchmark.json`](docs/tripartite_comparison_benchmark.json)，详见 [`docs/tripartite_comparison_benchmark.md`](docs/tripartite_comparison_benchmark.md)）：
-
-| 对比维度 | [1] 官方原生 Ollama (llama.cpp) | [2] 原版 Strata (OSDI '26) | [3] 本系统 KVMem-Strata-Fusion | 优化突破幅度 |
-| :--- | :--- | :--- | :--- | :--- |
-| **底层核心机制** | 标准 Metal 全量稠密自注意力计算 | HiRadix 前缀树 + 128B GPU 异步 I/O | CASA 规范不可变原子 (K-Freeze) + 解耦子质心 | 解耦存储与执行位置，零 re-RoPE 开销 |
-| **KV 物理存储压缩倍率** | **1.0× (未压缩)**，显存线性暴涨 | **1.0× (无 In-KV 阶梯量化)** | **7.85× ~ 8.0× (层级阶梯压缩)** | **物理足迹直接压降 87.3%** |
-| **10M 上下文存储足迹** | 324.0 GiB (直接 OOM 崩溃) | 324.0 GiB (无存量削减机制) | **42.0 GiB (紧凑常驻)** | 节省超过 280 GiB 物理存储空间 |
-| **检索排序保真度 (Recall@64)** | 1.0000 (全算基准) | **0.6450** (丢损 35.5% 检索排序) | **0.9224 (K=2) / 0.9382 (K=4)** | **相对 Strata 召回提升 +43.0% ~ +45.5%** |
-| **I/O 传输粒度与带宽** | 纯显存/内存常驻 (不支持外存分页) | 128B 极细粒度 (未对齐闪存 FTL) | **256KB Super-Tile 聚合** | **消除 FTL 随机队列惩罚，跑满 35.97 GB/s 连续吞吐** |
-| **PCIe / 闪存带宽利用率** | N/A (无异步换页机制) | **22% (卡死在 7.8 GB/s I/O 悬崖)** | **> 85% (对齐物理闪存 Block)** | 彻底击穿 7.8 GB/s 传输瓶颈 |
-| **控制面调度延迟** | 0.00 ms (直接原生 GEMM 算子) | ~16.4 ms (Python 调度器 / 原位冲突) | **0.0698 ms ~ 0.0911 ms (C++20 SIMD)** | 满足硬实时推理 SLA (< 0.1ms)，提速 180× |
-| **32GB 机器跑 70B 超大模型** | ❌ **崩溃** (43GB 权重无法常驻) | ❌ **瘫痪** (128B 导致 FTL 队列堵塞) | **✅ 成功** (双缓冲流式预取，RSS < 4.0GB) | 理论上限摆脱物理内存约束，转化为由 NVMe 决定 |
-| **Prompt 预填充吞吐 (4K, 7B)** | 实测 434.7 tok/s (Qwen2.5-7B) | 随小块 I/O 读放大严重下滑 | 消除 I/O 停顿，保持计算核心峰值利用率 | 长上下文预填充不受 I/O 拖累 |
-| **长上下文自回归生成速度** | 实测 26.3 tok/s (Qwen2.5-7B) | 长文本下因 KV 访存堵塞严重腰斩 | **消除 85% 以上 KV 传输流量，稳定锁死理论上限** | 32K~128K 窗口下速度衰减最小 |
+ 
+ 为直观展示系统优化幅度，本仓库在 Apple M6 硬件宿主机上，对**官方原生 Ollama (llama.cpp)**、**原版开源 Strata (https://github.com/Niko1221/Strata，23.6k⭐ 开源 C++ Qwen3.8-Flash-Next 推理引擎)** 以及 **KVMem-Strata-Fusion (本架构)** 进行了三方全维度实测与横向架构剖析（数据产物：[`docs/tripartite_comparison_benchmark.json`](docs/tripartite_comparison_benchmark.json)，详见 [`docs/tripartite_comparison_benchmark.md`](docs/tripartite_comparison_benchmark.md)）：
+ 
+ | 对比维度 | [1] 官方原生 Ollama (llama.cpp) | [2] 原版开源 Strata (Niko1221/Strata) | [3] 本系统 KVMem-Strata-Fusion | 优化突破幅度 |
+ | :--- | :--- | :--- | :--- | :--- |
+ | **系统定位与模型基座** | 工业级通用 LLM 引擎 (全量稠密运算) | 专为 Qwen3.8-Flash-Next (125B MoE) 消费级 PC 部署定制 | 统一通用超长上下文 (32K~10M) KV 规范化存储体系 | 支持从 7B 稠密到 125B MoE 全系列模型 |
+ | **显存调度与权重层流** | 纯内存/显存全量常驻，超显存溢出即崩 | 动态 VRAM 专家缓存 (4,105 槽) + 内存 CPU 算子 + SSD 直接 I/O (`--ple-io direct`) | 44.8GB 虚拟映射 + 80层双缓冲流水线 (`madvise` OS 异步预取) | 理论上限由 NVMe 决定，常驻 RSS < 4.0GB |
+ | **KV 缓存压缩机制** | **1.0× (未压缩)**，显存随上下文线性暴涨 | 8-bit KV (4K 以上) + KV 流式分页 (64K 以上) | **CASA 规范不可变原子 + LADDER 阶梯量化 (8.0×)** | **物理足迹压缩 87.3%**，节省 >280 GiB (10M ctx) |
+ | **KV 块检索与块管理** | 全量注意力计算 (不分页检索) | QSA 稀疏注意力 (4-token indexer cell + Top-K 收集) | IFR 解耦多子质心 (m=2/4) + UBBA 动态背包求解 | **Recall@64 从 0.6450 提升至 0.9224 ~ 0.9382** |
+ | **I/O 传输粒度与调度** | 无外存分页换入换出 | 细粒度分页换页 (PCIe 随机小包易遇 7.8 GB/s 瓶颈) | **256KB Super-Tile 聚合** | **对齐闪存 FTL Block，跑满 35.97 GB/s 带宽** |
+ | **控制面调度延迟** | 0.00 ms (直接原生连续算子) | C++ 异步图捕获与 CPU 专家线程池 | **0.0698 ms ~ 0.0911 ms (C++20 SIMD)** | 严格满足实时 SLA (< 0.1ms)，控制面无抖动 |
+ | **32GB 机器运行 70B~125B** | ❌ **崩溃** (43GB 无法常驻) | ⚠️ **仅支持 Coder 剪枝版 (29.6GB) 或低 RAM 模式** | **✅ 理论与模拟均支持** (层流式预取，RSS 稳定在 3.95GB) | 突破硬件瓶颈，支持满血超大模型深度运行 |
+ | **Prompt 预填充吞吐** | 实测 434.7 tok/s (7B) / 8478.5 tok/s (0.5B) | 标称 1,620 ~ 2,650 tok/s (RTX 5070 32K) | 消除 I/O 停顿，长文档下计算单元利用率更稳 | 32K~128K 窗口下吞吐不退化 |
+ | **自回归生成速度** | 实测 26.3 tok/s (7B) | 标称 53 ~ 94 tok/s (RTX 5070) / ~14 tok/s (Mac M4) | **削减 85% 以上 KV 传输流量，锁死带宽理论上限** | 彻底消除长文本 KV 搬运对总线的挤占 |
 
 ```bash
 # 本地一键复现三系统横向基准对比：

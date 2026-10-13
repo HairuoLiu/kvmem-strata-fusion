@@ -1,16 +1,16 @@
 {
-  "timestamp": "2026-10-13 18:59:41 UTC",
+  "timestamp": "2026-10-13 20:55:52 UTC",
   "host_platform": "Darwin arm64 (arm)",
   "benchmark_model": "qwen2.5:7b",
   "ollama_live_measurement": {
     "model": "qwen2.5:7b",
-    "wall_time_s": 10.283308042,
+    "wall_time_s": 5.448143125,
     "prompt_tokens": 990,
-    "prompt_tok_per_sec": 434.6612013508743,
+    "prompt_tok_per_sec": 707.6781651263349,
     "gen_tokens": 64,
-    "gen_tok_per_sec": 26.304519198599944,
-    "total_duration_s": 10.273143333,
-    "load_duration_s": 5.559877208
+    "gen_tok_per_sec": 28.60336473893396,
+    "total_duration_s": 5.437861709,
+    "load_duration_s": 1.798534667
   },
   "comparison_matrix": {
     "system_1_official_ollama": {
@@ -24,8 +24,8 @@
       "io_granularity": "\u65e0\u78c1\u76d8\u6362\u9875 (\u7eaf\u663e\u5b58/\u5185\u5b58\u5e38\u9a7b)",
       "io_bandwidth_util": "N/A (\u65e0\u5f02\u6b65\u6362\u9875\u673a\u5236)",
       "control_plane_latency": "0.00 ms (\u76f4\u63a5\u8fde\u7eed\u663e\u5b58\u77e9\u9635\u7b97\u5b50)",
-      "measured_prompt_eval_tok_s": 434.66,
-      "measured_generation_tok_s": 26.3,
+      "measured_prompt_eval_tok_s": 707.68,
+      "measured_generation_tok_s": 28.6,
       "over_memory_70b_capable": "\u5426 (43GB \u6743\u91cd\u5728 32GB \u673a\u5668\u4e0a\u76f4\u63a5\u5d29\u6e83)"
     },
     "system_2_native_strata": {
