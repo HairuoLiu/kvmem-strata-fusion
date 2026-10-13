@@ -2,11 +2,13 @@
 """
 Benchmark: Decoupled Multi-Centroid Retrieval vs Naive Strata Block-Mean
 Evaluates recall@topk across real Wikipedia articles on Qwen2.5-0.5B-Instruct.
-Compares:
-  - Arm A (Naive Strata Mean-K pooling, un-de-RoPEd)
-  - Arm Bmid (v1 re-RoPE at block midpoint artefact)
-  - Arm B (v2 Position-Matched de-RoPE monolithic mean)
-  - Decoupled Sub-Centroids (K=2, K=4)
+Audits under the rigorous Token-Level Mean-of-Cosine Attention Ground Truth:
+  Truth:    mean_{t in block} cos(q_token, k_token(t))
+  Arm A:    Naive Strata Mean-K pooling (rotated keys)
+  Arm Bmid: de-RoPE -> mean -> re-RoPE at block midpoint (v1 position-mismatch artefact)
+  Arm B:    Position-matched monolithic de-RoPE mean (m=1)
+  Decoupled K=2: Dual sub-centroids per block (m=2)
+  Decoupled K=4: Quad sub-centroids per block (m=4)
 
 Produces verifiable audit JSON artifact at docs/decoupled_retrieval_benchmark.json.
 """
@@ -23,7 +25,16 @@ import torch
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from transformers import AutoTokenizer, AutoModelForCausalLM
-from benchmarks.real_kv_audit_og_v2 import fetch_wiki_corpus, get_kv, rope_forward, rope_inverse, rope_at_batch
+from benchmarks.real_kv_audit_og_v2 import (
+    fetch_wiki_corpus,
+    get_kv,
+    rope_inverse,
+    rope_at_batch,
+    norm_rows,
+    centroids,
+    block_means,
+    recall_at_k
+)
 
 MODEL_ID = "Qwen/Qwen2.5-0.5B-Instruct"
 BLOCK = 32
@@ -31,11 +42,11 @@ BLOCK = 32
 def run_decoupled_benchmark(max_len: int = 4096, topk: int = 64, n_query: int = 64, out_json: str = "docs/decoupled_retrieval_benchmark.json"):
     print("=" * 75)
     print(f"Decoupled Retrieval Benchmark on {MODEL_ID}")
-    print("Auditing: Naive Strata (Arm A) vs v1 Bmid vs v2 Position-Matched vs Decoupled K=2/4")
+    print("Ground Truth: Exact Token-Level Mean-of-Cosine Attention (Mean-of-Cos)")
     print("=" * 75)
     
     tok = AutoTokenizer.from_pretrained(MODEL_ID)
-    model = AutoModelForCausalLM.from_pretrained(MODEL_ID, torch_dtype=torch.float32)
+    model = AutoModelForCausalLM.from_pretrained(MODEL_ID, dtype=torch.float32)
     model.eval()
 
     corpus, provenance = fetch_wiki_corpus(max_chars=60000)
@@ -51,96 +62,93 @@ def run_decoupled_benchmark(max_len: int = 4096, topk: int = 64, n_query: int = 
     kv = get_kv(out.past_key_values, n_layers)
     mid_layer = n_layers // 2
 
-    K_mid = kv[mid_layer][0][0, :, :T, :].double()  # [H, T, D]
-    H, D = K_mid.shape[0], K_mid.shape[2]
+    K_rot = kv[mid_layer][0][0, :, :T, :].float()  # [H, T, D]
+    H, D = K_rot.shape[0], K_rot.shape[2]
 
     rot = model.model.rotary_emb
     pos = torch.arange(0, T, dtype=torch.long).unsqueeze(0)
-    cos, sin = rot(K_mid.unsqueeze(0), pos)
-    cos_b, sin_b = cos.unsqueeze(1).double(), sin.unsqueeze(1).double()
+    cos, sin = rot(K_rot.unsqueeze(0), pos)
+    cos_b, sin_b = cos.unsqueeze(1).float(), sin.unsqueeze(1).float()
 
-    Kd = rope_inverse(K_mid.unsqueeze(0), cos_b, sin_b).squeeze(0)  # [H, T, D]
+    K_de = rope_inverse(K_rot.unsqueeze(0), cos_b, sin_b).squeeze(0)  # [H, T, D]
+    Kde_n = norm_rows(K_de.reshape(H * T, D)).reshape(H, T, D)
 
-    armA = torch.zeros(n_blocks, D, dtype=torch.float64)
-    armB_matched = torch.zeros(n_blocks, D, dtype=torch.float64)
-    truth = torch.zeros(n_blocks, D, dtype=torch.float64)
-    sub2 = torch.zeros(n_blocks, 2, D, dtype=torch.float64)
-    sub4 = torch.zeros(n_blocks, 4, D, dtype=torch.float64)
+    # Compute block representations
+    M_rot = block_means(K_rot, BLOCK)                               # [nb, H, D]
+    M_de = block_means(K_de, BLOCK)                                 # [nb, H, D]
+    mid_pos = torch.arange(n_blocks) * BLOCK + BLOCK // 2
+    M_re = torch.stack([rope_at_batch(M_de[:, h, :], mid_pos, cos_b, sin_b) for h in range(H)], dim=1)
 
-    for h in range(H):
-        for b in range(n_blocks):
-            s, e = b * BLOCK, (b + 1) * BLOCK
-            rot_blk, der_blk = K_mid[h, s:e, :], Kd[h, s:e, :]
+    Mr_n = norm_rows(M_rot.reshape(-1, D)).reshape(n_blocks, H, D)
+    Md_n = norm_rows(M_de.reshape(-1, D)).reshape(n_blocks, H, D)
+    Mre_n = norm_rows(M_re.reshape(-1, D)).reshape(n_blocks, H, D)
 
-            # Arm A: Mean of rotated keys (Native Strata)
-            armA[b] += rot_blk.mean(dim=0) / H
-            # Arm B matched: de-RoPE -> mean, evaluated in de-RoPE space (v2 position-matched)
-            armB_matched[b] += der_blk.mean(dim=0) / H
-            # Truth: uncompressed de-RoPE block representation
-            truth[b] += der_blk.mean(dim=0) / H
+    # Sub-centroids for K=2 and K=4
+    C2 = centroids(K_de, BLOCK, 2)  # [2, nb, H, D]
+    C4 = centroids(K_de, BLOCK, 4)  # [4, nb, H, D]
+    C2_n = norm_rows(C2.reshape(-1, D)).reshape(2, n_blocks, H, D)
+    C4_n = norm_rows(C4.reshape(-1, D)).reshape(4, n_blocks, H, D)
 
-            # Sub-centroids K=2 (tokens 0-15 and 16-31)
-            sub2[b, 0] += der_blk[:16].mean(dim=0) / H
-            sub2[b, 1] += der_blk[16:].mean(dim=0) / H
-
-            # Sub-centroids K=4 (4 groups of 8 tokens)
-            for sub_i in range(4):
-                sub4[b, sub_i] += der_blk[sub_i*8:(sub_i+1)*8].mean(dim=0) / H
-
-    # Arm Bmid: vectorized re-RoPE at block midpoints
-    mid_positions = torch.tensor([b * BLOCK + BLOCK // 2 for b in range(n_blocks)], dtype=torch.long)
-    armB_mid = rope_at_batch(armB_matched, mid_positions, cos_b, sin_b)
-
-    def cos_rank(q, M):
-        Mn = M / (M.norm(dim=-1, keepdim=True) + 1e-12)
-        return Mn @ q
-
-    def max_cos_rank_multi(q, sub_centroids):
-        norms = sub_centroids.norm(dim=-1, keepdim=True) + 1e-12
-        normed = sub_centroids / norms
-        scores = torch.einsum("bsd,d->bs", normed, q)
-        max_scores, _ = scores.max(dim=-1)
-        return max_scores
-
-    k = min(topk, n_blocks)
     rng = np.random.RandomState(42)
-    q_blocks = rng.choice(n_blocks, size=min(n_query, n_blocks), replace=False)
+    q_positions = rng.choice(T, size=min(n_query, T), replace=False)
 
     results = {
         "Strata_Naive_A": [],
         "Monolithic_Bmid": [],
         "Monolithic_B_matched": [],
-        "Decoupled_K2": [],
-        "Decoupled_K4": []
+        "Decoupled_K2_Mean": [],
+        "Decoupled_K2_Max": [],
+        "Decoupled_K4_Mean": [],
+        "Decoupled_K4_Max": [],
+        "Random_Baseline": []
     }
 
-    for qb in q_blocks:
-        q = truth[qb] / (truth[qb].norm() + 1e-12)
-        gt = set(torch.topk(cos_rank(q, truth), k).indices.tolist())
+    k = min(topk, n_blocks)
 
-        # 1. Strata Naive Mean-K (Arm A)
-        top_A = set(torch.topk(cos_rank(q, armA), k).indices.tolist())
-        results["Strata_Naive_A"].append(len(gt & top_A) / k)
+    for p in q_positions:
+        q_de = K_de[:, p, :]  # [H, D]
+        q_de_n = norm_rows(q_de)
+        q_rot = rope_at_batch(q_de, torch.tensor([int(p)] * H), cos_b, sin_b)
+        q_rot_n = norm_rows(q_rot)
 
-        # 2. Monolithic de-RoPE midpoint (Arm Bmid)
-        top_Bmid = set(torch.topk(cos_rank(q, armB_mid), k).indices.tolist())
-        results["Monolithic_Bmid"].append(len(gt & top_Bmid) / k)
+        # 1. Ground Truth: Mean-of-Cosine attention over individual tokens in each block
+        per_tok = torch.einsum("hd,htd->ht", q_de_n, Kde_n)  # [H, T]
+        truth = per_tok[:, :n_blocks * BLOCK].reshape(H, n_blocks, BLOCK).mean(dim=2).mean(dim=0)
+        t_order = torch.argsort(truth, descending=True).numpy()
 
-        # 3. Monolithic de-RoPE position-matched (Arm B matched)
-        top_Bmatch = set(torch.topk(cos_rank(q, armB_matched), k).indices.tolist())
-        results["Monolithic_B_matched"].append(len(gt & top_Bmatch) / k)
+        # 2. Arm A: Naive Strata (Mean over rotated keys)
+        score_A = torch.einsum("hd,nhd->n", q_rot_n, Mr_n)
+        results["Strata_Naive_A"].append(recall_at_k(torch.argsort(score_A, descending=True).numpy(), t_order, k))
 
-        # 4. Decoupled Sub-Centroids (K=2)
-        top_sub2 = set(torch.topk(max_cos_rank_multi(q, sub2), k).indices.tolist())
-        results["Decoupled_K2"].append(len(gt & top_sub2) / k)
+        # 3. Arm Bmid: v1 Re-RoPE at block midpoint
+        score_Bmid = torch.einsum("hd,nhd->n", q_de_n, Mre_n)
+        results["Monolithic_Bmid"].append(recall_at_k(torch.argsort(score_Bmid, descending=True).numpy(), t_order, k))
 
-        # 5. Decoupled Sub-Centroids (K=4)
-        top_sub4 = set(torch.topk(max_cos_rank_multi(q, sub4), k).indices.tolist())
-        results["Decoupled_K4"].append(len(gt & top_sub4) / k)
+        # 4. Arm B: Position-matched de-RoPE monolithic mean (m=1)
+        score_B = torch.einsum("hd,nhd->n", q_de_n, Md_n)
+        results["Monolithic_B_matched"].append(recall_at_k(torch.argsort(score_B, descending=True).numpy(), t_order, k))
+
+        # 5. Decoupled K=2: Mean and Max over 2 sub-centroids
+        sc2 = torch.einsum("hd,mnhd->mn", q_de_n, C2_n)
+        sc2_mean = sc2.mean(dim=0)
+        sc2_max = sc2.max(dim=0).values
+        results["Decoupled_K2_Mean"].append(recall_at_k(torch.argsort(sc2_mean, descending=True).numpy(), t_order, k))
+        results["Decoupled_K2_Max"].append(recall_at_k(torch.argsort(sc2_max, descending=True).numpy(), t_order, k))
+
+        # 6. Decoupled K=4: Mean and Max over 4 sub-centroids
+        sc4 = torch.einsum("hd,mnhd->mn", q_de_n, C4_n)
+        sc4_mean = sc4.mean(dim=0)
+        sc4_max = sc4.max(dim=0).values
+        results["Decoupled_K4_Mean"].append(recall_at_k(torch.argsort(sc4_mean, descending=True).numpy(), t_order, k))
+        results["Decoupled_K4_Max"].append(recall_at_k(torch.argsort(sc4_max, descending=True).numpy(), t_order, k))
+
+        # 7. Random Baseline
+        rand_order = rng.permutation(n_blocks)
+        results["Random_Baseline"].append(recall_at_k(rand_order, t_order, k))
 
     summary = {}
     print("\n" + "=" * 75)
-    print(f"Empirical Results on Layer {mid_layer} (n={len(q_blocks)} queries, top-{k} retrieval):")
+    print(f"Empirical Results on Layer {mid_layer} (n={len(q_positions)} queries, top-{k} retrieval):")
     print("=" * 75)
     base_a = np.mean(results["Strata_Naive_A"])
     for name, vals in results.items():
@@ -157,15 +165,15 @@ def run_decoupled_benchmark(max_len: int = 4096, topk: int = 64, n_query: int = 
         }
         print(f"  {name:<22} : recall@{k} = {mean_val:.4f} (95% CI: [{ci[0]:.4f}, {ci[1]:.4f}])  Gain: {gain:+.2f}%")
 
-    # Save to JSON audit artifact
     audit_data = {
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
         "model_id": MODEL_ID,
         "tokens": T,
         "n_blocks": n_blocks,
         "mid_layer": mid_layer,
-        "n_query": len(q_blocks),
+        "n_query": len(q_positions),
         "top_k": k,
+        "ground_truth_definition": "mean_t cos(q_de, k_de(t)) [exact token-level attention]",
         "summary": {k: {kk: vv for kk, vv in v.items() if kk != "raw_scores"} for k, v in summary.items()}
     }
     os.makedirs(os.path.dirname(out_json), exist_ok=True)
