@@ -98,7 +98,7 @@
 
 ## 快速上手与使用指南 (Quickstart & Usage)
 
-本软件既包含纯 Python 高层原型与评测套件，也包含面向生产环境的底层高性能 C++20 / SIMD 核心引擎。
+本软件既包含方便用户直观对比的**交互式 Web 图形面板 (Web Dashboard)**，也包含面向底层开发的 C++20 / SIMD 核心引擎与评测流水线。详细使用说明可查阅：👉 [**完整使用手册 (USER_MANUAL.md)**](docs/USER_MANUAL.md)。
 
 ### 1. 环境准备 (Environment Setup)
 
@@ -117,16 +117,29 @@ source .venv/bin/activate
 pip install torch transformers numpy scipy pytest xxhash
 ```
 
-### 2. 运行自动化测试套件 (Run PyTest Suite)
+### 2. 一键启动交互式 Web 图形对比面板 (Launch Web GUI)
 
-运行全量 80 项单元测试，验证所有代数旋转不变性、Softmax Tier-Bias、双子质心离散度、不一致对 McNemar 配对方差等契约：
+启动内置轻量级看板，在浏览器中直观横向对比 Ollama、Strata 标称与本方案实测：
 
 ```bash
-pytest tests/
+.venv/bin/python web/server.py
 ```
-*预期输出*：`80 passed in ~2.3s`。
+* 打开浏览器访问：`http://127.0.0.1:8080`
+* **看板核心功能**：
+  * **三系统全维度对比大表**：一键点击 `▶ 重新实测对比 (n=5)`，自动调用后台运行 5 次采样；
+  * **在线模型对话 (Live Chat)**：向本地模型发送测试提示词，实时输出精确 tok/s 速度与耗时；
+  * **C++ 高性能引擎一键压测**：在网页端直接触发 `main_bench`，实时查看微秒级调度耗时。
 
-### 3. 本地构建与运行 C++20 原生高性能引擎 (Build & Run C++ Engine)
+### 3. 运行自动化测试套件 (Run PyTest Suite)
+
+运行全量 83 项单元测试，验证所有代数旋转不变性、Softmax Tier-Bias、双子质心离散度、不一致对 McNemar 配对方差等契约：
+
+```bash
+.venv/bin/pytest tests/
+```
+*预期输出*：`83 passed in ~3s`。
+
+### 4. 本地构建与运行 C++20 原生高性能引擎 (Build & Run C++ Engine)
 
 针对底层调度延迟与页表转换，编译运行 C++20 优化二进制：
 
@@ -146,7 +159,7 @@ clang++ -O3 -std=c++20 -march=armv8-a+simd -I./csrc \
 - IFR ARM Neon SIMD 向量化打分与 LSE 规约；
 - CASA 零拷贝页表地址转换（>10 亿次/秒）与 256KB Super-Tile 聚合。
 
-### 4. 运行真实模型检索基准复现 (Run Real-Model Benchmarks)
+### 5. 运行真实模型检索基准复现 (Run Real-Model Benchmarks)
 
 #### (A) 解耦子质心检索保真度实测对比：
 在真实长文本与 Qwen 架构权重（4096 tokens, Layer 12, top-64 检索）下，严格在内容空间 Token 级真值下评测各检索臂保真度（数据产物：[`docs/decoupled_retrieval_benchmark.json`](docs/decoupled_retrieval_benchmark.json)）：
@@ -170,7 +183,7 @@ python benchmarks/benchmark_decoupled_retrieval.py
 python benchmarks/run_mac_layer_streaming_sim.py
 ```
 
-### 5. 跨平台硬件理论极限与吞吐模型 (Hardware Limits & Throughput Specification)
+### 6. 跨平台硬件理论极限与吞吐模型 (Hardware Limits & Throughput Specification)
 
 为杜绝“空口宣称”，本方案建立了严格遵从冯·诺依曼访存定律与总线带宽香农极限的物理推导模型（详见 [`docs/cross_platform_hardware_limits_and_throughput.md`](docs/cross_platform_hardware_limits_and_throughput.md)）：
 
@@ -192,7 +205,7 @@ python benchmarks/run_mac_layer_streaming_sim.py
 
 *注：KVMem-Strata-Fusion 算法将 32K~128K 场景下的 KV Cache 传输流量削减 85% 以上，确保在长上下文下不挤占权重流式 I/O 通道，锁死上述理论上限。*
 
-### 6. 三系统全维度横向基准对比 (Tripartite Horizontal Comparison)
+### 7. 三系统全维度横向基准对比 (Tripartite Horizontal Comparison)
 
 为直观展示系统优化幅度，本仓库在 Apple M6 硬件宿主机上，对**官方原生 Ollama (llama.cpp 实测基线)**、**原版开源 Strata (https://github.com/Niko1221/Strata，23.6k⭐ 官方标称规格)** 以及 **KVMem-Strata-Fusion (本架构原型与模拟)** 进行了三方全维度实测与横向架构剖析（数据产物：[`docs/tripartite_comparison_benchmark.json`](docs/tripartite_comparison_benchmark.json)，详见 [`docs/tripartite_comparison_benchmark.md`](docs/tripartite_comparison_benchmark.md)）：
 

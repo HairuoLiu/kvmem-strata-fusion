@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>KVMem-Strata-Fusion 统一推理与三方对比看板 (Tripartite Dashboard)</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --card-bg: #161b22;
+      --border: #30363d;
+      --text: #c9d1d9;
+      --heading: #58a6ff;
+      --accent: #238636;
+      --warn: #d29922;
+      --danger: #f85149;
+      --code-bg: #090d13;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      margin: 0;
+      padding: 24px;
+      line-height: 1.5;
+    }
+    header {
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 16px;
+      margin-bottom: 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    h1 {
+      margin: 0;
+      color: var(--heading);
+      font-size: 1.6rem;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .badge {
+      font-size: 0.75rem;
+      padding: 4px 8px;
+      border-radius: 12px;
+      background: #1f6feb33;
+      color: #58a6ff;
+      border: 1px solid #1f6feb;
+    }
+    .status-pill {
+      font-size: 0.8rem;
+      padding: 4px 10px;
+      border-radius: 12px;
+      font-weight: 600;
+    }
+    .status-online { background: #23863633; color: #3fb950; border: 1px solid #238636; }
+    .status-offline { background: #f8514933; color: #f85149; border: 1px solid #f85149; }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+      gap: 20px;
+      margin-bottom: 24px;
+    }
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 20px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+    }
+    .card h2 {
+      margin-top: 0;
+      color: #f0f6fc;
+      font-size: 1.15rem;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 10px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    button {
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      padding: 8px 16px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+    button:hover { opacity: 0.9; }
+    button:disabled { background: #30363d; cursor: not-allowed; }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 12px;
+      font-size: 0.85rem;
+    }
+    th, td {
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      text-align: left;
+    }
+    th {
+      background: #21262d;
+      color: #f0f6fc;
+      font-weight: 600;
+    }
+    tr:nth-child(even) { background: #161b22; }
+    tr:hover { background: #1c2128; }
+
+    .tag-sys1 { color: #58a6ff; font-weight: 600; }
+    .tag-sys2 { color: #d29922; font-weight: 600; }
+    .tag-sys3 { color: #3fb950; font-weight: 600; }
+
+    pre {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 12px;
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      font-size: 0.8rem;
+      overflow-x: auto;
+      max-height: 280px;
+      color: #7ee787;
+    }
+    .chat-box {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-top: 12px;
+    }
+    textarea {
+      background: var(--code-bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px;
+      font-family: inherit;
+      font-size: 0.9rem;
+      resize: vertical;
+      min-height: 60px;
+    }
+    .response-area {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 12px;
+      font-size: 0.9rem;
+      min-height: 60px;
+      white-space: pre-wrap;
+    }
+    .metric-val {
+      font-size: 1.3rem;
+      font-weight: 700;
+      color: #58a6ff;
+    }
+    .metric-sub {
+      font-size: 0.75rem;
+      color: #8b949e;
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div>
+      <h1>KVMem-Strata-Fusion 统一控制与对比面板 <span class="badge">v2.0-clean</span></h1>
+      <small style="color: #8b949e;">宿主机：Apple M6 (Mac18,5) · 32GB RAM · NVMe 771GB 可用</small>
+    </div>
+    <div id="service-status">
+      <span class="status-pill status-offline" id="ollama-pill">Ollama 检查中...</span>
+    </div>
+  </header>
+
+  <!-- Metric Gauges -->
+  <div class="grid">
+    <div class="card">
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <div>
+          <div class="metric-val" id="metric-recall">0.9382</div>
+          <div class="metric-sub">检索保真度 (Recall@64, K=4)</div>
+        </div>
+        <div style="text-align: right;">
+          <div style="color: #3fb950; font-weight: 600;">+45.46%</div>
+          <div class="metric-sub">相对朴素均值 (0.6450)</div>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <div>
+          <div class="metric-val" id="metric-compress">8.0×</div>
+          <div class="metric-sub">KV 缓存物理压缩比 (LADDER)</div>
+        </div>
+        <div style="text-align: right;">
+          <div style="color: #3fb950; font-weight: 600;">-87.3%</div>
+          <div class="metric-sub">10M 显存足迹 324G → 42G</div>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <div>
+          <div class="metric-val" id="metric-rss">&lt; 4.0 GB</div>
+          <div class="metric-sub">70B 模型层流式物理常驻 (RSS)</div>
+        </div>
+        <div style="text-align: right;">
+          <div style="color: #58a6ff; font-weight: 600;">44.8GB 映射</div>
+          <div class="metric-sub">80 层双缓冲流式预取</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main Horizontal Comparison Table -->
+  <div class="card" style="margin-bottom: 24px;">
+    <h2>
+      <span>三系统全维度横向基准对比矩阵 (Tripartite Horizontal Comparison)</span>
+      <button onclick="runTripartiteBenchmark()" id="btn-run-tripartite">▶ 重新实测对比 (n=5)</button>
+    </h2>
+    <div style="overflow-x: auto;">
+      <table>
+        <thead>
+          <tr>
+            <th style="width: 18%;">对比维度</th>
+            <th style="width: 27%;" class="tag-sys1">[1] 官方原生 Ollama (实测基线)</th>
+            <th style="width: 27%;" class="tag-sys2">[2] 原版开源 Strata (标称规格)</th>
+            <th style="width: 28%;" class="tag-sys3">[3] 本系统 KVMem-Strata-Fusion (原型与模拟)</th>
+          </tr>
+        </thead>
+        <tbody id="comparison-tbody">
+          <tr>
+            <td><strong>底层系统定位</strong></td>
+            <td>标准通用 LLM 引擎，全显存/内存常驻</td>
+            <td>专为 Qwen3.8-Flash-Next 消费级 PC 定制</td>
+            <td>通用超长上下文 (32K~10M) KV 规范化存储体系</td>
+          </tr>
+          <tr>
+            <td><strong>KV 物理压缩</strong></td>
+            <td><strong>1.0× (未压缩)</strong>，随长度线性暴涨</td>
+            <td>8-bit KV (4K+) + 流式 (64K+)</td>
+            <td><strong>7.85× ~ 8.0× (CASA 规范原子 + 阶梯量化)</strong></td>
+          </tr>
+          <tr>
+            <td><strong>检索保真度 (Recall@64)</strong></td>
+            <td>1.0000 (全量计算基准)</td>
+            <td>0.6450 (BlockMean_A 均值池化实测)</td>
+            <td><strong>0.9224 (双质心) / 0.9382 (四质心) [内容代理]</strong></td>
+          </tr>
+          <tr>
+            <td><strong>I/O 传输粒度与调度</strong></td>
+            <td>无外存换页 (纯显存/内存常驻)</td>
+            <td>QSA 4-cell 页表 (细粒度分页换页)</td>
+            <td><strong>256KB Super-Tile 聚合 (对齐物理闪存 Block)</strong></td>
+          </tr>
+          <tr>
+            <td><strong>控制面调度延迟</strong></td>
+            <td>0.00 ms (直接原生连续算子)</td>
+            <td>C++ 异步图捕获与 CPU 线程池</td>
+            <td><strong>Fast Path 68~106 µs (微秒级 POD 求解器)</strong></td>
+          </tr>
+          <tr>
+            <td><strong>32GB 机器跑 70B/125B</strong></td>
+            <td>❌ <strong>直接崩溃</strong> (43GB 无法常驻 OOM)</td>
+            <td>⚠️ 仅支持 Coder 剪枝版 (29.6GB) 或流式</td>
+            <td><strong>✅ 架构可行</strong> (层流式预取，常驻 RSS &lt; 4.0GB)</td>
+          </tr>
+          <tr>
+            <td><strong>Prompt 预填充吞吐 (4K)</strong></td>
+            <td id="cell-prompt-tok">21,659.3 ± 11,687.4 tok/s (7B)</td>
+            <td>标称 1,620 ~ 2,650 tok/s (RTX 5070 32K)</td>
+            <td>待整机端到端全量测量 (UNMEASURED)</td>
+          </tr>
+          <tr>
+            <td><strong>自回归生成速度</strong></td>
+            <td id="cell-gen-tok">29.5 ± 0.4 tok/s (7B)</td>
+            <td>标称 53 ~ 94 tok/s (PC) / ~14 tok/s (Mac)</td>
+            <td><strong>层流式模拟 ~27.1 s/tok (专为离线推理，非日常交互)</strong></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="grid">
+    <!-- Live Chat / Inference Panel -->
+    <div class="card">
+      <h2>
+        <span>在线实时模型调用 (Live Ollama API)</span>
+        <select id="chat-model" style="background:#21262d; color:#c9d1d9; border:1px solid #30363d; border-radius:4px; padding:4px;">
+          <option value="qwen2.5:7b">qwen2.5:7b (Q4_K_M)</option>
+          <option value="qwen2.5:0.5b">qwen2.5:0.5b (Q4_K_M)</option>
+        </select>
+      </h2>
+      <div class="chat-box">
+        <textarea id="chat-input" placeholder="输入对话测试内容，测试本地生成速度与延迟...">请简要解释什么是大模型的 KV Cache 压缩与检索？</textarea>
+        <button onclick="sendChat()" id="btn-send-chat">发送测试</button>
+        <div style="font-size:0.8rem; color:#8b949e;" id="chat-meta">准备就绪</div>
+        <div class="response-area" id="chat-output">等待输入...</div>
+      </div>
+    </div>
+
+    <!-- C++ Engine & Benchmark Runner -->
+    <div class="card">
+      <h2>
+        <span>C++20 高性能内核微基准 (Track B)</span>
+        <button onclick="runCppBench()" id="btn-run-cpp">▶ 执行 main_bench</button>
+      </h2>
+      <p style="font-size:0.85rem; color:#8b949e; margin:0 0 10px 0;">
+        实测：UBBA 背包求解延迟、ARM Neon SIMD 向量化打分、CASA 页表零拷贝转换与 Super-Tile 聚合。
+      </p>
+      <pre id="cpp-output">点击上方按钮执行 C++20 高性能调度器基准压测...</pre>
+    </div>
+  </div>
+
+  <script>
+    async function updateStatus() {
+      try {
+        const res = await fetch('/api/status');
+        const data = await res.json();
+        const pill = document.getElementById('ollama-pill');
+        if (data.ollama_online) {
+          pill.className = 'status-pill status-online';
+          pill.innerText = `● Ollama 已就绪 (${data.ollama_models.length} 个模型)`;
+        } else {
+          pill.className = 'status-pill status-offline';
+          pill.innerText = '● Ollama 未启动';
+        }
+
+        if (data.tripartite_benchmark && data.tripartite_benchmark.ollama_live_measurement) {
+          const m = data.tripartite_benchmark.ollama_live_measurement;
+          if (m.gen_tok_per_sec_mean) {
+            document.getElementById('cell-gen-tok').innerText = `${m.gen_tok_per_sec_mean.toFixed(1)} ± ${m.gen_tok_per_sec_std.toFixed(1)} tok/s (${m.model})`;
+            document.getElementById('cell-prompt-tok').innerText = `${m.prompt_tok_per_sec_mean.toFixed(1)} ± ${m.prompt_tok_per_sec_std.toFixed(1)} tok/s (${m.model})`;
+          }
+        }
+      } catch (e) {
+        console.error('Failed to fetch status:', e);
+      }
+    }
+
+    async function runTripartiteBenchmark() {
+      const btn = document.getElementById('btn-run-tripartite');
+      btn.disabled = true;
+      btn.innerText = '⏳ 正在测量 (5 次采样)...';
+      try {
+        const res = await fetch('/api/run_tripartite', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({model: 'qwen2.5:7b'})
+        });
+        const out = await res.json();
+        if (out.success) {
+          alert('三方对比基准采样完成！数据已同步到看板。');
+          updateStatus();
+        } else {
+          alert('执行出错：' + (out.error || out.stderr));
+        }
+      } catch (e) {
+        alert('请求失败：' + e);
+      } finally {
+        btn.disabled = false;
+        btn.innerText = '▶ 重新实测对比 (n=5)';
+      }
+    }
+
+    async function runCppBench() {
+      const btn = document.getElementById('btn-run-cpp');
+      const outPre = document.getElementById('cpp-output');
+      btn.disabled = true;
+      btn.innerText = '⏳ 编译与运行中...';
+      outPre.innerText = '正在执行 build/main_bench...';
+      try {
+        const res = await fetch('/api/run_cpp_bench', { method: 'POST' });
+        const out = await res.json();
+        if (out.success) {
+          outPre.innerText = out.stdout;
+        } else {
+          outPre.innerText = '错误：\n' + (out.error || out.stderr);
+        }
+      } catch (e) {
+        outPre.innerText = '请求失败：' + e;
+      } finally {
+        btn.disabled = false;
+        btn.innerText = '▶ 执行 main_bench';
+      }
+    }
+
+    async function sendChat() {
+      const btn = document.getElementById('btn-send-chat');
+      const input = document.getElementById('chat-input').value;
+      const model = document.getElementById('chat-model').value;
+      const meta = document.getElementById('chat-meta');
+      const outArea = document.getElementById('chat-output');
+
+      if (!input.trim()) return;
+      btn.disabled = true;
+      btn.innerText = '生成中...';
+      meta.innerText = '正在向本地 Ollama 请求...';
+      outArea.innerText = '思考中...';
+
+      try {
+        const res = await fetch('/api/run_chat', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({model: model, prompt: input})
+        });
+        const out = await res.json();
+        if (out.success) {
+          outArea.innerText = out.response;
+          meta.innerText = `耗时：${out.wall_time.toFixed(2)}s | 生成速度：${out.tok_per_sec.toFixed(1)} tok/s | 生成 token：${out.tokens}`;
+        } else {
+          outArea.innerText = '请求出错：' + (out.error || '未知错误');
+          meta.innerText = '失败';
+        }
+      } catch (e) {
+        outArea.innerText = '请求异常：' + e;
+      } finally {
+        btn.disabled = false;
+        btn.innerText = '发送测试';
+      }
+    }
+
+    // Initial load
+    updateStatus();
+    setInterval(updateStatus, 5000);
+  </script>
+</body>
+</html>
