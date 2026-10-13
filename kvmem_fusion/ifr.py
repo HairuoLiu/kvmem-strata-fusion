@@ -366,31 +366,34 @@ class IFRRetriever:
         candidate_ids = list(self.index.probe_candidates(query))
         meta["candidate_count"] = float(len(candidate_ids))
 
-        # Build candidate representations (including doublet needle vectors if split)
-        # Using block-level score aggregation: compute scores for each sub-centroid, then aggregate per block (mean or max)
-        block_sub_scores = {bid: [] for bid in candidate_ids}
+        # Build candidate representations
+        # Optimization: compute effective block vector directly or vectorize across candidates
+        # For split blocks, the mean of sub-centroids is (sc_0 + sc_1)/2; for unsplit, it is mean_k
+        cand_vectors = []
         for bid in candidate_ids:
             blk = self.blocks[bid]
             is_split, sub_centroids = self.index.anti_collapse.inspect_and_split(blk)
             if is_split:
-                for sc in sub_centroids:
-                    sc_logit = float(self.lse_tracker.compute_logits(query, np.array([sc]))[0])
-                    block_sub_scores[bid].append(sc_logit)
+                cand_vectors.append(np.mean(sub_centroids, axis=0))
             else:
-                blk_logit = float(self.lse_tracker.compute_logits(query, np.array([blk.mean_k]))[0])
-                block_sub_scores[bid].append(blk_logit)
+                cand_vectors.append(blk.mean_k)
 
-        # Aggregate block scores: mean pooling preserves whole-block content fidelity without false-positive inflation
-        block_final_scores = []
-        for bid in candidate_ids:
-            scores = block_sub_scores[bid]
-            block_final_scores.append((bid, float(np.mean(scores))))
+        cand_vectors_arr = np.asarray(cand_vectors)
+        # Vectorized batch logits computation (single dot product across all candidates)
+        cand_logits = self.lse_tracker.compute_logits(query, cand_vectors_arr)
 
-        # Sort blocks by aggregated score descending
-        block_final_scores.sort(key=lambda x: x[1], reverse=True)
-        selected_blocks = [x[0] for x in block_final_scores[:self.target_top_k]]
+        # Top-K candidate block selection
+        top_k_cnt = min(self.target_top_k, len(candidate_ids))
+        if len(cand_logits) <= top_k_cnt:
+            selected_blocks = candidate_ids
+        else:
+            top_cand_indices = np.argpartition(-cand_logits, top_k_cnt - 1)[:top_k_cnt]
+            sorted_indices = top_cand_indices[np.argsort(-cand_logits[top_cand_indices])]
+            selected_blocks = [candidate_ids[i] for i in sorted_indices]
 
-        selected_indices_in_all = np.array([block_ids.index(bid) for bid in selected_blocks])
+        # Fast O(1) dict lookup instead of O(N) list.index
+        block_to_idx = {bid: idx for idx, bid in enumerate(block_ids)}
+        selected_indices_in_all = np.array([block_to_idx[bid] for bid in selected_blocks])
         meta["discarded_mass"] = self.lse_tracker.compute_discarded_mass(
             all_logits, selected_indices_in_all, full_lse=full_lse
         )
