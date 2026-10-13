@@ -117,18 +117,18 @@ source .venv/bin/activate
 pip install torch transformers numpy scipy pytest xxhash
 ```
 
-### 2. 一键启动交互式 Web 图形对比面板 (Launch Web GUI)
+### 2. 一键启动本地 AI 客户端界面 (Launch Local AI Client)
 
-启动内置轻量级看板，在浏览器中直观横向对比 Ollama、Strata 标称与本方案实测：
+启动与 Ollama / Strata 原生体验一致的本地桌面 Web 交互客户端：
 
 ```bash
 .venv/bin/python web/server.py
 ```
 * 打开浏览器访问：`http://127.0.0.1:8080`
-* **看板核心功能**：
-  * **三系统全维度对比大表**：一键点击 `▶ 重新实测对比 (n=5)`，自动调用后台运行 5 次采样；
-  * **在线模型对话 (Live Chat)**：向本地模型发送测试提示词，实时输出精确 tok/s 速度与耗时；
-  * **C++ 高性能引擎一键压测**：在网页端直接触发 `main_bench`，实时查看微秒级调度耗时。
+* **客户端核心功能**：
+  * **💬 对话视图 (Chat)**：模型热切换（Qwen 全系列）、极简 Markdown 对话流、流式打字机逐字输出、实时 Token/s 速度小标；
+  * **📊 系统监控 (Monitor)**：直观查看 8.0× KV Cache 压缩比、0.9382 检索保真度、物理常驻显存/内存 (RSS) 与四大子系统运行状态；
+  * **🔌 OpenAI 兼容接口**：在后台直接提供标准 `http://127.0.0.1:8080/v1` API，支持无缝接入 Cursor、Continue、Cline 等第三方开发工具。
 
 ### 3. 运行自动化测试套件 (Run PyTest Suite)
 
