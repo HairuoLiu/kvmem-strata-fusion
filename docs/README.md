@@ -10,7 +10,7 @@
    - [`logs/tripartite_comparison_run.log`](logs/tripartite_comparison_run.log): 运行日志。
 
 2. **真实模型长文本解耦检索保真度**：
-   - [`decoupled_retrieval_benchmark.json`](decoupled_retrieval_benchmark.json): 基于真实 Wikipedia 长文本（4096 tokens, Layer 12）的检索保真度实测数据（对比 Naive Mean-K `0.6450` vs Decoupled K2 `0.9224` vs Decoupled K4 `0.9382`）。
+   - [`decoupled_retrieval_benchmark.json`](decoupled_retrieval_benchmark.json): 基于真实 Wikipedia 长文本（4096 tokens, Layer 12）的检索保真度实测数据（本方臂 BlockMean_A `0.6450` vs Decoupled K2 `0.9224` vs Decoupled K4 `0.9382`；真值为内容空间相似度代理，非注意力）。
    - [`logs/decoupled_retrieval_run.log`](logs/decoupled_retrieval_run.log): 运行日志。
 
 3. **跨平台硬件物理极限与生成速度推导**：
@@ -20,6 +20,8 @@
 4. **端到端基准与审计验证**：
    - [`track_a_benchmark_report.md`](track_a_benchmark_report.md): Track A 端到端长上下文评测与因果分解报告。
    - [`og_verify_aa07e56_gt_sensitivity.md`](og_verify_aa07e56_gt_sensitivity.md): 针对 Token 级真值与注意力敏感性的独立复核报告。
+   - [`og_audit_tripartite_8d88c3b.md`](og_audit_tripartite_8d88c3b.md): 对三系统横向对比基准（8d88c3b/7efc5b5）的独立审计。
+   - [`og_audit_752df3d.md`](og_audit_752df3d.md): 对 release 整合提交（752df3d）的独立审计（含复现脚本 [`og_repro_752df3d/`](og_repro_752df3d/)）。
    - [`og_track_a_v3_cleanup_compare_optimize.md`](og_track_a_v3_cleanup_compare_optimize.md): 清理清单、对比方案与本地运行目标规范。
 
 5. **执行日志与归档资料**：
