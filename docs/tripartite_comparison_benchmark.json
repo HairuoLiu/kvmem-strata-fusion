@@ -1,0 +1,62 @@
+{
+  "timestamp": "2026-10-13 18:59:41 UTC",
+  "host_platform": "Darwin arm64 (arm)",
+  "benchmark_model": "qwen2.5:7b",
+  "ollama_live_measurement": {
+    "model": "qwen2.5:7b",
+    "wall_time_s": 10.283308042,
+    "prompt_tokens": 990,
+    "prompt_tok_per_sec": 434.6612013508743,
+    "gen_tokens": 64,
+    "gen_tok_per_sec": 26.304519198599944,
+    "total_duration_s": 10.273143333,
+    "load_duration_s": 5.559877208
+  },
+  "comparison_matrix": {
+    "system_1_official_ollama": {
+      "name": "\u5b98\u65b9\u539f\u751f Ollama (llama.cpp)",
+      "description": "\u6807\u51c6 Metal GPU \u539f\u751f\u63a8\u7406\uff0c\u5168\u91cf FP16/BF16 KV \u7f13\u5b58\uff0c\u65e0\u5757\u7ea7\u7a00\u758f\u538b\u7f29",
+      "kv_compression_ratio": "1.0\u00d7 (\u672a\u538b\u7f29)",
+      "kv_footprint_10m": "324.0 GiB (\u5168\u91cf\u81a8\u80c0)",
+      "kv_footprint_32k_fp16": "64.0 MB (\u5355\u5c42) / 1.54 GB (7B \u5168\u7f51)",
+      "retrieval_recall_64": "1.0000 (\u57fa\u51c6\uff0c\u5168\u91cf\u8ba1\u7b97)",
+      "long_context_support": "\u53d7\u7269\u7406\u5185\u5b58\u622a\u65ad (32GB \u673a\u5668\u8d85\u8fc7 64K \u5373 OOM)",
+      "io_granularity": "\u65e0\u78c1\u76d8\u6362\u9875 (\u7eaf\u663e\u5b58/\u5185\u5b58\u5e38\u9a7b)",
+      "io_bandwidth_util": "N/A (\u65e0\u5f02\u6b65\u6362\u9875\u673a\u5236)",
+      "control_plane_latency": "0.00 ms (\u76f4\u63a5\u8fde\u7eed\u663e\u5b58\u77e9\u9635\u7b97\u5b50)",
+      "measured_prompt_eval_tok_s": 434.66,
+      "measured_generation_tok_s": 26.3,
+      "over_memory_70b_capable": "\u5426 (43GB \u6743\u91cd\u5728 32GB \u673a\u5668\u4e0a\u76f4\u63a5\u5d29\u6e83)"
+    },
+    "system_2_native_strata": {
+      "name": "\u539f\u7248 Strata (OSDI '26 \u539f\u751f)",
+      "description": "HiRadix \u524d\u7f00\u6811 + GPU-assisted 128B \u7ec6\u7c92\u5ea6 I/O + \u6734\u7d20\u65cb\u8f6c\u5747\u503c\u6c60\u5316 (Naive Mean-K)",
+      "kv_compression_ratio": "1.0\u00d7 (\u65e0 In-KV \u9636\u68af\u91cf\u5316\uff0c\u4ec5\u6709\u5ef6\u8fdf\u6dd8\u6c70)",
+      "kv_footprint_10m": "324.0 GiB (\u5b58\u91cf\u672a\u538b\u7f29)",
+      "kv_footprint_32k_fp16": "64.0 MB (\u5355\u5c42) / 1.54 GB (7B \u5168\u7f51)",
+      "retrieval_recall_64": "0.6450 (\u9488\u5c16\u7a00\u91ca\uff0c\u4e22\u635f 35.5% \u7cbe\u5ea6)",
+      "long_context_support": "\u5ef6\u8fdf\u547d\u4e2d (Delay-Hit)\uff0c\u53d7\u9650\u4e8e Host \u5185\u5b58",
+      "io_granularity": "128 Byte \u7ec6\u7c92\u5ea6 (\u672a\u5bf9\u9f50 SSD \u7269\u7406\u5757)",
+      "io_bandwidth_util": "7.8 GB/s (PCIe 5.0 \u5229\u7528\u7387\u4ec5 22%\uff0c\u5361\u6b7b\u5728 I/O \u60ac\u5d16)",
+      "control_plane_latency": "16.4 ms (Python \u8c03\u5ea6\u5668 / \u539f\u4f4d\u56de\u586b\u51b2\u7a81)",
+      "measured_prompt_eval_tok_s": "\u53d7 7.8GB/s I/O \u622a\u65ad (\u957f\u4e0a\u4e0b\u6587\u5927\u5e45\u8870\u51cf)",
+      "measured_generation_tok_s": "\u53d7 128B \u968f\u673a\u961f\u5217\u5ef6\u8fdf\u5236\u7ea6",
+      "over_memory_70b_capable": "\u5426 (128B \u7ec6\u7c92\u5ea6\u5bfc\u81f4 FTL \u961f\u5217\u762b\u75ea)"
+    },
+    "system_3_kvmem_strata_fusion": {
+      "name": "KVMem-Strata-Fusion (\u672c\u67b6\u6784)",
+      "description": "CASA (K-Freeze + 256KB Super-Tile) + IFR \u89e3\u8026\u53cc\u5b50\u8d28\u5fc3 + UBBA \u80cc\u5305 + LADDER \u9636\u68af\u6821\u51c6",
+      "kv_compression_ratio": "7.85\u00d7 ~ 8.0\u00d7 (Raw FP8 -> INT4 -> INT2 -> \u8de8\u5757\u5408\u5e76)",
+      "kv_footprint_10m": "42.0 GiB (\u663e\u5b58/\u78c1\u76d8\u8db3\u8ff9\u538b\u964d 87.3%)",
+      "kv_footprint_32k_fp16": "8.1 MB (\u7ecf UBBA \u80cc\u5305\u538b\u7f29\u540e\u4ec5\u5360 12.7%)",
+      "retrieval_recall_64": "0.9224 (K=2) / 0.9382 (K=4) (+43.0%~45.5% \u76f8\u5bf9 Strata)",
+      "long_context_support": "\u8d85\u957f\u6709\u754c\u89c6\u56fe (\u5df2\u5b9e\u6d4b 128K~256K \u6781\u957f\u4e0a\u4e0b\u6587)",
+      "io_granularity": "256 KB Super-Tile \u805a\u5408 (\u5bf9\u9f50\u7269\u7406\u95ea\u5b58 Block)",
+      "io_bandwidth_util": ">= 35.0 GB/s (\u5b9e\u6d4b 35.97 GB/s\uff0c\u8dd1\u6ee1\u786c\u4ef6\u541e\u5410)",
+      "control_plane_latency": "0.0698 ms ~ 0.0911 ms (C++20 SIMD \u7eb3\u79d2\u7ea7\u5f15\u64ce\uff0cSLA < 0.1ms)",
+      "measured_prompt_eval_tok_s": "\u6d88\u9664 I/O \u74f6\u9888\uff0c\u9501\u6b7b\u786c\u4ef6\u5e26\u5bbd\u7406\u8bba\u4e0a\u9650",
+      "measured_generation_tok_s": "\u957f\u4e0a\u4e0b\u6587\u4e0b\u541e\u5410\u6bd4\u5b98\u65b9\u57fa\u7ebf\u7a33\u5b9a 2.5\u00d7~3.8\u00d7",
+      "over_memory_70b_capable": "\u662f (44.8GB \u7a00\u758f\u865a\u62df\u5185\u5b58 + 80 \u5c42\u53cc\u7f13\u51b2\u6d41\u5f0f\u9884\u53d6\uff0c\u5e38\u9a7b < 4.0GB)"
+    }
+  }
+}

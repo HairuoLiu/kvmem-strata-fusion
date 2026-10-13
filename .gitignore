@@ -10,3 +10,5 @@
 **/*.local.md
 .venv/
 build/
+bin/
+*.zip
