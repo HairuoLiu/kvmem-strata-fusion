@@ -39,6 +39,7 @@ from kvmem_fusion.metal_attention_hook import (
     apply_metal_attention_hooks,
     metal_sdpa_prefill,
 )
+from kvmem_fusion.spill_manager import SuperTileSpillManager
 
 
 class KVMemNativeEngine:
@@ -64,17 +65,31 @@ class KVMemNativeEngine:
         self.model = None
         self.is_loaded = False
 
-        # Initialize KVMem-Strata-Fusion Core Components
-        self.atom_store = CanonicalAtomStore(block_size=32, head_dim=64)
-        self.ifr_retriever = IFRRetriever(dim=64, dispersion_threshold=0.868, use_normalized=True)
-        self.anti_collapse = AntiCollapseSplitter(dispersion_threshold=0.868, use_normalized=True)
+        # Real model architecture parameters (updated dynamically on _load_model)
+        self.num_layers = 28
+        self.kv_heads = 8
+        self.head_dim = 128
+        bytes_per_elem = 2 if self.dtype in (torch.float16, torch.bfloat16) else 4
+        self.bytes_per_token = 2 * self.num_layers * self.kv_heads * self.head_dim * bytes_per_elem
 
-        # Telemetry State
+        # Initialize KVMem-Strata-Fusion Core Components
+        self.atom_store = CanonicalAtomStore(block_size=32, head_dim=self.head_dim)
+        self.ifr_retriever = IFRRetriever(dim=self.head_dim, dispersion_threshold=0.868, use_normalized=True)
+        self.anti_collapse = AntiCollapseSplitter(dispersion_threshold=0.868, use_normalized=True)
+        self.spill_manager = SuperTileSpillManager(
+            atom_store=self.atom_store,
+            ifr_retriever=self.ifr_retriever,
+            cache_dir="/tmp/kvmem_cache",
+            max_active_tokens=4096,
+        )
+
+        # Telemetry State: None prior to empirical measurement (no hardcoded marketing values)
         self.total_tokens_generated = 0
         self.total_context_tokens = 0
-        self.last_generation_speed = 32.3
-        self.last_ttft_ms = 166.0
-        self.last_ubba_ms = 0.052
+        self.last_generation_speed = None
+        self.last_ttft_ms = None
+        self.last_ubba_ms = None
+        self.last_recalled_precision = None
         self.active_casa_blocks = 0
         self.active_doublets_split = 0
         self.recent_history: List[Dict[str, Any]] = []
@@ -113,11 +128,29 @@ class KVMemNativeEngine:
                     low_cpu_mem_usage=True
                 ).to(self.device)
 
+                cfg = self.model.config
+                self.num_layers = getattr(cfg, "num_hidden_layers", 28)
+                self.kv_heads = getattr(cfg, "num_key_value_heads", getattr(cfg, "num_attention_heads", 8))
+                self.head_dim = getattr(cfg, "head_dim", cfg.hidden_size // cfg.num_attention_heads)
+                bytes_per_elem = 2 if self.dtype in (torch.float16, torch.bfloat16) else 4
+                self.bytes_per_token = 2 * self.num_layers * self.kv_heads * self.head_dim * bytes_per_elem
+
+                # Re-initialize KVMem components with dynamically detected head_dim
+                self.atom_store = CanonicalAtomStore(block_size=32, head_dim=self.head_dim)
+                self.ifr_retriever = IFRRetriever(dim=self.head_dim, dispersion_threshold=0.868, use_normalized=True)
+                self.anti_collapse = AntiCollapseSplitter(dispersion_threshold=0.868, use_normalized=True)
+                self.spill_manager = SuperTileSpillManager(
+                    atom_store=self.atom_store,
+                    ifr_retriever=self.ifr_retriever,
+                    cache_dir="/tmp/kvmem_cache",
+                    max_active_tokens=4096,
+                )
+
                 # Apply Apple Silicon Metal attention hooks for hardware-fused SDPA
                 self.model = apply_metal_attention_hooks(self.model, dtype=self.dtype, device=self.device)
                 self.model.eval()
                 self.is_loaded = True
-                print("[KVMem Native Engine] ✅ Model and KVMem Metal hook layers initialized natively in memory.")
+                print(f"[KVMem Native Engine] ✅ Model initialized natively: {self.num_layers}L, {self.kv_heads}KVH, head_dim={self.head_dim}, {self.bytes_per_token} bytes/token.")
             except Exception as e:
                 print(f"[KVMem Native Engine] ❌ Warning: Failed to load local model weights: {e}")
                 self.is_loaded = False
@@ -154,28 +187,40 @@ class KVMemNativeEngine:
         token_list = input_ids[0].tolist()
         num_blocks = math.ceil(len(token_list) / 32)
 
-        # Initialize custom Metal KV Cache Interceptor
+        # Initialize custom Metal KV Cache Interceptor with real head_dim and spill manager
         interceptor = MetalKVCacheInterceptor(
             block_size=32,
-            head_dim=64,
+            head_dim=self.head_dim,
             model_id=self.model_name,
             dtype=self.dtype,
             device=self.device,
             atom_store=self.atom_store,
             ifr_retriever=self.ifr_retriever,
             anti_collapse=self.anti_collapse,
+            spill_manager=self.spill_manager,
+            max_cache_tokens=4096,
         )
         interceptor.set_token_ids(token_list)
 
-        # Run real UBBA knapsack solver for layers
+        # Run real UBBA knapsack solver using real block dispersities
+        active_blocks = list(self.atom_store.blocks.values())
         ubba_t0 = time.perf_counter()
-        ubba_candidates = [
-            create_ladder_block_candidate(
-                block_id=f"blk_{i}",
-                weight=1.0 / (i + 1),
-                dispersity=0.05
-            ) for i in range(min(max(num_blocks, 1), 64))
-        ]
+        if active_blocks:
+            ubba_candidates = [
+                create_ladder_block_candidate(
+                    block_id=blk.block_id,
+                    weight=1.0 / (i + 1),
+                    dispersity=float(blk.dispersity)
+                ) for i, blk in enumerate(active_blocks[-64:])
+            ]
+        else:
+            ubba_candidates = [
+                create_ladder_block_candidate(
+                    block_id=f"blk_{i}",
+                    weight=1.0 / (i + 1),
+                    dispersity=0.0
+                ) for i in range(min(max(num_blocks, 1), 64))
+            ]
         target_cov = max(sum(c.weight for c in ubba_candidates) * 0.95, 0.1)
         solve_ubba_greedy(ubba_candidates, target_coverage=target_cov)
         self.last_ubba_ms = round((time.perf_counter() - ubba_t0) * 1000, 3)
@@ -304,16 +349,43 @@ class KVMemNativeEngine:
         return format_chatml(messages, tools=tools)
 
     def get_telemetry(self) -> Dict[str, Any]:
-        ctx = max(self.total_context_tokens, 128)
+        ctx = self.total_context_tokens
         bytes_per_elem = 2 if self.dtype in (torch.float16, torch.bfloat16) else 4
-        uncompressed_mb = round((ctx * 81920 * (bytes_per_elem / 4.0)) / (1024 * 1024), 2)
-        compressed_mb = round(uncompressed_mb / 8.0, 2)
-        saved_mb = round(uncompressed_mb - compressed_mb, 2)
+        # Dynamic calculation based on detected model architecture: 2 * L * KVH * D * bytes
+        bytes_per_tok = self.bytes_per_token if hasattr(self, "bytes_per_token") and self.bytes_per_token > 0 else (2 * 28 * 8 * 128 * bytes_per_elem)
+
+        if ctx == 0:
+            uncompressed_mb = 0.0
+            resident_ram_mb = 0.0
+            spilled_disk_mb = 0.0
+            saved_mb = 0.0
+            comp_ratio = None
+            savings_pct = None
+        else:
+            uncompressed_mb = round((ctx * bytes_per_tok) / (1024 * 1024), 2)
+            spilled_tokens = getattr(self.spill_manager, "total_spilled_tokens", 0)
+            resident_tokens = max(ctx - spilled_tokens, 0)
+            resident_ram_mb = round((resident_tokens * bytes_per_tok) / (1024 * 1024), 2)
+            spilled_disk_mb = round((spilled_tokens * bytes_per_tok) / (1024 * 1024), 2)
+            saved_mb = round(uncompressed_mb - resident_ram_mb, 2)
+            if resident_ram_mb > 0 and uncompressed_mb > 0:
+                comp_ratio = f"{round(uncompressed_mb / resident_ram_mb, 1)}x"
+                savings_pct = f"{round((1.0 - resident_ram_mb / uncompressed_mb) * 100, 1)}%"
+            else:
+                comp_ratio = "1.0x"
+                savings_pct = "0.0%"
 
         return {
             "engine": "KVMem-Strata-Fusion Native Engine v2.0 (Apple Metal Metal-SDPA)",
             "backend": f"In-Process Apple Metal Unified Memory ({self.device.upper()}, {str(self.dtype).replace('torch.', '')})",
             "model_path": self.model_path,
+            "model_name": os.path.basename(os.path.dirname(self.model_path)) if self.model_path else self.model_name,
+            "architecture": {
+                "layers": getattr(self, "num_layers", 28),
+                "kv_heads": getattr(self, "kv_heads", 8),
+                "head_dim": getattr(self, "head_dim", 128),
+                "bytes_per_token": bytes_per_tok
+            },
             "is_native_active": self.is_loaded,
             "dtype": str(self.dtype).replace("torch.", ""),
             "metal_sdpa_active": True,
@@ -322,15 +394,16 @@ class KVMemNativeEngine:
             "active_casa_blocks": self.active_casa_blocks,
             "active_doublets_split": self.active_doublets_split,
             "kv_stats": {
-                "compression_ratio": "8.0x",
+                "compression_ratio": comp_ratio,
                 "uncompressed_mb": uncompressed_mb,
-                "compressed_mb": compressed_mb,
+                "resident_ram_mb": resident_ram_mb,
+                "spilled_disk_mb": spilled_disk_mb,
                 "saved_mb": saved_mb,
-                "savings_pct": "87.5%",
-                "precision": "float16 (50% memory cut, 2x MPS GEMM throughput)"
+                "savings_pct": savings_pct,
+                "precision": f"{str(self.dtype).replace('torch.', '')} ({bytes_per_tok} bytes/token from config)"
             },
             "ubba_solver_ms": self.last_ubba_ms,
-            "recalled_precision": "0.9382 (Recall@64)",
+            "recalled_precision": self.last_recalled_precision,
             "speed_tok_s": self.last_generation_speed,
             "ttft_ms": self.last_ttft_ms,
             "recent_requests": self.recent_history[-10:]

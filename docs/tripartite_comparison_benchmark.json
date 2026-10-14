@@ -35,7 +35,7 @@
       "status": "OFFICIAL_PUBLISHED_SPEC",
       "description": "专为 Qwen3.8-Flash-Next (125B MoE) 定制：自适应 VRAM 专家缓存 (~4,500/24,576 专家，262K 上下文降至 ~1,600) + 内存驻留/SSD 专家流式读取，支持 MTP 投机采样",
       "kv_compression_ratio": "原生未压缩 / 8-bit KV (32K 上下文以上启用)",
-      "kv_footprint_10m": "324.0 GiB (无跨块深度阶梯量化)",
+      "kv_footprint_10m": "~114.0 GiB (fp16 原生存储，12个QSA层) / 57.0 GiB (int8)",
       "retrieval_recall_64": "N/A (全量权重流式，不设 KV 块级检索)",
       "io_granularity": "顺序专家块流式加载 (单次 1.75 MB @ 2.97 GB/s，3 次 0.58 MB @ 2.30 GB/s)",
       "control_plane_latency": "C++ 异步图捕获与 CPU 专家线程池调度",

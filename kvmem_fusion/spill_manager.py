@@ -274,6 +274,12 @@ class SuperTileSpillManager:
                 "total_tiles": len(self._tiles),
             }
 
+    @property
+    def total_spilled_tokens(self) -> int:
+        """Total tokens currently or historically spilled to disk SuperTiles."""
+        with self._lock:
+            return self.stats.get("total_spilled_tokens", 0)
+
     def should_spill(self) -> bool:
         """Check if active memory exceeds configured token or byte watermark."""
         with self._lock:

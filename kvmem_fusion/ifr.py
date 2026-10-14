@@ -84,7 +84,19 @@ class LSECacheTracker:
 
     def compute_logits(self, query: np.ndarray, candidates: np.ndarray) -> np.ndarray:
         """Compute unnormalized attention dot-product logits: s_j = (q . k_j) / sqrt(d)."""
-        return np.dot(candidates, query) * self.scale
+        if candidates is None or len(candidates) == 0:
+            return np.empty((0,), dtype=np.float32)
+        cand_arr = np.asarray(candidates)
+        if cand_arr.size == 0:
+            return np.empty((0,), dtype=np.float32)
+        if cand_arr.ndim == 1:
+            if cand_arr.shape[0] == query.shape[0]:
+                cand_arr = cand_arr.reshape(1, -1)
+            else:
+                return np.empty((0,), dtype=np.float32)
+        dim = query.shape[-1] if query.ndim > 0 and query.shape[-1] > 0 else self.head_dim
+        scale = 1.0 / np.sqrt(dim)
+        return np.dot(cand_arr, query) * scale
 
     def compute_lse(self, logits: np.ndarray) -> Tuple[float, float]:
         """
@@ -334,6 +346,7 @@ class IFRRetriever:
 
         self.content_hashes[h_str] = block.block_id
         self.blocks[block.block_id] = block
+        self.index.block_store[block.block_id] = block
         return block.block_id
 
     def build_index(self):
@@ -341,11 +354,12 @@ class IFRRetriever:
         unique_blocks = list(self.blocks.values())
         self.index.train_and_index(unique_blocks)
 
-    def retrieve(self, query: np.ndarray) -> Tuple[List[str], Dict[str, float]]:
+    def retrieve(self, query: np.ndarray, top_k: Optional[int] = None) -> Tuple[List[str], Dict[str, float]]:
         """
         Execute IFR retrieval pipeline.
         Returns: (selected_block_ids, metadata_dict)
         """
+        eff_top_k = top_k if top_k is not None else self.target_top_k
         unique_count = len(self.blocks)
         meta = {
             "unique_blocks": unique_count,
@@ -355,49 +369,64 @@ class IFRRetriever:
         }
 
         block_ids = list(self.blocks.keys())
+        if not block_ids:
+            return [], meta
+
         all_mean_keys = np.array([self.blocks[bid].mean_k for bid in block_ids])
         all_logits = self.lse_tracker.compute_logits(query, all_mean_keys)
-        full_lse, _ = self.lse_tracker.compute_lse(all_logits)
+        full_lse, _ = self.lse_tracker.compute_lse(all_logits) if len(all_logits) > 0 else (0.0, 1.0)
 
         # Exact Bypass check
         if unique_count <= self.tau:
             meta["bypassed_exact"] = 1.0
             meta["candidate_count"] = float(unique_count)
-            top_indices = self.lse_tracker.rank_unnormalized(all_logits, self.target_top_k)
+            top_indices = self.lse_tracker.rank_unnormalized(all_logits, eff_top_k)
             selected = [block_ids[idx] for idx in top_indices]
             meta["discarded_mass"] = self.lse_tracker.compute_discarded_mass(
                 all_logits, top_indices, full_lse=full_lse
-            )
+            ) if len(all_logits) > 0 else 0.0
             return selected, meta
 
         # L1 IVF Probe
+        if not self.index.is_trained:
+            self.build_index()
+
         candidate_ids = list(self.index.probe_candidates(query))
+        if not candidate_ids:
+            candidate_ids = block_ids[:min(len(block_ids), eff_top_k)]
         meta["candidate_count"] = float(len(candidate_ids))
 
         # Build candidate representations
-        # Optimization: compute effective block vector directly or vectorize across candidates
-        # For split blocks, the mean of sub-centroids is (sc_0 + sc_1)/2; for unsplit, it is mean_k
         cand_vectors = []
+        valid_candidates = []
         for bid in candidate_ids:
-            blk = self.blocks[bid]
+            blk = self.blocks.get(bid)
+            if blk is None:
+                continue
             is_split, sub_centroids = self.index.anti_collapse.inspect_and_split(blk)
             if is_split:
                 cand_vectors.append(np.mean(sub_centroids, axis=0))
             else:
                 cand_vectors.append(blk.mean_k)
+            valid_candidates.append(bid)
+
+        if len(cand_vectors) == 0:
+            selected_blocks = block_ids[:min(len(block_ids), eff_top_k)]
+            meta["discarded_mass"] = 0.0
+            return selected_blocks, meta
 
         cand_vectors_arr = np.asarray(cand_vectors)
         # Vectorized batch logits computation (single dot product across all candidates)
         cand_logits = self.lse_tracker.compute_logits(query, cand_vectors_arr)
 
         # Top-K candidate block selection
-        top_k_cnt = min(self.target_top_k, len(candidate_ids))
+        top_k_cnt = min(eff_top_k, len(valid_candidates))
         if len(cand_logits) <= top_k_cnt:
-            selected_blocks = candidate_ids
+            selected_blocks = valid_candidates
         else:
             top_cand_indices = np.argpartition(-cand_logits, top_k_cnt - 1)[:top_k_cnt]
             sorted_indices = top_cand_indices[np.argsort(-cand_logits[top_cand_indices])]
-            selected_blocks = [candidate_ids[i] for i in sorted_indices]
+            selected_blocks = [valid_candidates[i] for i in sorted_indices]
 
         # Fast O(1) dict lookup instead of O(N) list.index
         block_to_idx = {bid: idx for idx, bid in enumerate(block_ids)}

@@ -189,15 +189,13 @@ class KVMemAppHandler(BaseHTTPRequestHandler):
 
         if self.path in ("/v1/models", "/api/tags") or self.path.startswith("/v1/models/"):
             models = [
+                "qwen3",
                 "qwen3.8",
                 "qwen3.8-27b",
                 "qwen3.8-flash-next",
-                "qwen3",
-                "Qwen3.8-Flash-Next (125B MoE / ISTA-DASLab GSQ)",
+                "Qwen3-0.6B-Instruct (Local In-Process Baseline MPS)",
                 "Qwen3.8-27B-GSQ (IQ3_S-mtp / 27B Dense)",
-                "Qwen3.8-Coder-30B (Low-RAM MoE / 64K)",
-                "gpt-4o",
-                "gpt-3.5-turbo",
+                "Qwen3.8-Flash-Next (125B MoE / ISTA-DASLab GSQ)",
                 "default"
             ]
             self.send_response(200)
@@ -260,15 +258,9 @@ class KVMemAppHandler(BaseHTTPRequestHandler):
                     "is_native": True
                 }
             else:
-                ctx_tokens = max(TOTAL_CONTEXT_TOKENS, 128)
-                uncompressed_mb = round((ctx_tokens * 81920) / (1024 * 1024), 2)
-                compressed_mb = round(uncompressed_mb / 8.0, 2)
-                saved_mb = round(uncompressed_mb - compressed_mb, 2)
-                ubba_ms = round(0.045 + (ctx_tokens % 97) * 0.0003, 3)
-
                 telemetry = {
-                    "engine": "KVMem-Strata-Fusion v2.0 (Hybrid Gateway)",
-                    "backend": "Apple Metal Unified Memory / ARM Neon",
+                    "engine": "KVMem-Strata-Fusion v2.0 (Standby Gateway)",
+                    "backend": "Awaiting Native Engine / Ollama Fallback",
                     "host": f"{platform.system()} {platform.machine()} (Apple Silicon M-Series 32GB)",
                     "system_memory": {
                         "used_gb": used_gb,
@@ -281,16 +273,16 @@ class KVMemAppHandler(BaseHTTPRequestHandler):
                     "total_tokens": TOTAL_TOKENS_GENERATED,
                     "context_tokens": TOTAL_CONTEXT_TOKENS,
                     "kv_stats": {
-                        "compression_ratio": "8.0x",
-                        "uncompressed_mb": uncompressed_mb,
-                        "compressed_mb": compressed_mb,
-                        "saved_mb": saved_mb,
-                        "savings_pct": "87.5%"
+                        "compression_ratio": None,
+                        "uncompressed_mb": 0.0,
+                        "compressed_mb": 0.0,
+                        "saved_mb": 0.0,
+                        "savings_pct": None
                     },
-                    "ubba_solver_ms": ubba_ms,
-                    "recalled_precision": "0.9382",
-                    "speed_tok_s": round(LAST_GENERATION_SPEED, 1),
-                    "ttft_ms": round(LAST_TTFT_MS, 1),
+                    "ubba_solver_ms": None,
+                    "recalled_precision": None,
+                    "speed_tok_s": round(LAST_GENERATION_SPEED, 1) if LAST_GENERATION_SPEED else None,
+                    "ttft_ms": round(LAST_TTFT_MS, 1) if LAST_TTFT_MS else None,
                     "recent_requests": REQUEST_HISTORY[-10:],
                     "is_native": False
                 }
