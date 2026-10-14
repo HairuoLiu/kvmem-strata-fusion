@@ -19,9 +19,11 @@
 
 4. **端到端基准与审计验证**：
    - [`track_a_benchmark_report.md`](track_a_benchmark_report.md): Track A 端到端长上下文评测与因果分解报告。
+   - [`USER_MANUAL.md`](USER_MANUAL.md): Web 客户端（`web/server.py`，Ollama 兼容代理）使用手册；客户端性质与监控面板数据来源见 `og_audit_49e3f52.md` §2。
    - [`og_verify_aa07e56_gt_sensitivity.md`](og_verify_aa07e56_gt_sensitivity.md): 针对 Token 级真值与注意力敏感性的独立复核报告。
    - [`og_audit_tripartite_8d88c3b.md`](og_audit_tripartite_8d88c3b.md): 对三系统横向对比基准（8d88c3b/7efc5b5）的独立审计。
    - [`og_audit_752df3d.md`](og_audit_752df3d.md): 对 release 整合提交（752df3d）的独立审计（含复现脚本 [`og_repro_752df3d/`](og_repro_752df3d/)）。
+   - [`og_audit_49e3f52.md`](og_audit_49e3f52.md): 对基准标注整改 + einsum 向量化 + Web 客户端上线（48917ae–49e3f52）的独立审计。
    - [`og_track_a_v3_cleanup_compare_optimize.md`](og_track_a_v3_cleanup_compare_optimize.md): 清理清单、对比方案与本地运行目标规范。
 
 5. **执行日志与归档资料**：
