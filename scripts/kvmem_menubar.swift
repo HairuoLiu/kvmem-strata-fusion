@@ -10,12 +10,12 @@ class MenuBarController: NSObject {
     var statusString = "正在检测..."
     var speedString = "-- tok/s"
     var memString = "-- GB"
-    var currentModel = "Qwen3.8-27B-GSQ"
+    var currentModel = "Qwen3-0.6B-Instruct (Local In-Process Baseline MPS)"
     
     let availableModels = [
+        "Qwen3-0.6B-Instruct (Local In-Process Baseline MPS)",
         "Qwen3.8-27B-GSQ",
-        "Qwen3.8-Flash-Next (125B MoE)",
-        "Qwen3.8-Coder-30B"
+        "Qwen3.8-Flash-Next (125B MoE)"
     ]
 
     override init() {
@@ -51,7 +51,7 @@ class MenuBarController: NSObject {
                         }
                     }
                     self.statusString = "● 运行中 (端口 8080)"
-                    let shortName = self.currentModel.replacingOccurrences(of: "Qwen3.8-", with: "").components(separatedBy: " ").first ?? "27B"
+                    let shortName = self.currentModel.contains("0.6B") ? "0.6B" : (self.currentModel.replacingOccurrences(of: "Qwen3.8-", with: "").components(separatedBy: " ").first ?? "27B")
                     self.statusItem.button?.title = "⚡ KVMem (\(shortName))"
                 } else {
                     self.isRunning = false
@@ -168,7 +168,7 @@ class MenuBarController: NSObject {
 • 备用地址 (Host 简写)   : http://127.0.0.1:8080
 • API 密钥 (API Key)     : sk-local (本地私有服务，填任意非空字符串均可)
 • 当前默认模型 (Model ID): \(currentModel)
-• 可选模型列表           : qwen3.8-27b, qwen3.8-flash-next, qwen3.8-coder-30b, gpt-4o
+• 可选模型列表           : qwen3, qwen3.8, qwen3.8-27b, qwen3.8-flash-next
 
 【2. 输入与输出参数 (I/O Parameters)】
 • 采样温度 (Temperature) : 0.7 (写代码/严格分析建议 0.2, 创意写作建议 0.7~0.8)
