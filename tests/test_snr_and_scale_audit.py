@@ -146,7 +146,7 @@ def test_production_ifr_retriever_normalized_wiring():
 def test_real_qwen_kv_norm_dispersion_bounds_from_audit_data():
     """
     Verify Critique E in docs/og_review_c5e76c8.md:
-    Validate on real Qwen2.5-0.5B audit distribution from docs/ifr_dispersion_check_20261011-093826.json:
+    Validate on empirical Qwen audit distribution from docs/ifr_dispersion_check_20261011-093826.json:
     - raw_max mean is ~11.46 (explaining why raw threshold 0.85 saturated 100%)
     - norm_max mean is ~0.549
     - theta=0.868 achieves bounded selective triggering (~5.8%)

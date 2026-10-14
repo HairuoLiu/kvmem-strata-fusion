@@ -308,6 +308,14 @@ class IFRRetriever:
         self.blocks: Dict[str, IFRBlock] = {}
         self.content_hashes: Dict[str, str] = {}
 
+    @property
+    def block_store(self) -> Dict[str, IFRBlock]:
+        return self.blocks
+
+    @block_store.setter
+    def block_store(self, val: Dict[str, IFRBlock]):
+        self.blocks = val
+
     def add_block(self, block: IFRBlock, parent_hash: Optional[str] = None) -> str:
         """
         L0 Identity Deduplication: registers block or references existing.

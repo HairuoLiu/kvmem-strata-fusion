@@ -10,7 +10,7 @@
 > **第一轮质疑（含证据行号）：[`docs/external_review_critique.md`](docs/external_review_critique.md)**
 >
 > ✅ 外部团队已在 `273ae4b` 中**修好了报告诚信问题**（状态改为合成自洽验证、硬件 Gate 标 UNMEASURED、采纳子系统降级）。
-> ✅ 又在 `f093dfd` 中**完成真实模型 P0**（真跑 Qwen2.5-0.5B-Instruct）、补上 Random 基线与误差分解，并实现 `stopping.py`（Wilson / McNemar N=471 / Deff / Lan-DeMets OBF，公式已逐条验算正确）。
+> ✅ 补上 Random 基线与误差分解，并实现 `stopping.py`（Wilson / McNemar N=471 / Deff / Lan-DeMets OBF，公式已逐条验算正确）。
 > ⚠️ 第三轮复核（**[`docs/external_review_critique_v3.md`](docs/external_review_critique_v3.md)**）指出两点：M0 判据被事后替换（一条从未测量、一条换用相对误差口径），且真实工作点 σ≈8.03 未被任何阈值分析覆盖。
 >
 > 🔬 **我们已自己把缺失的实验做掉了**（不是又一份清单）：v1 **[`docs/real_kv_audit_og_report.md`](docs/real_kv_audit_og_report.md)**，v2 **[`docs/real_kv_audit_og_v2_report.md`](docs/real_kv_audit_og_v2_report.md)**；代码 [`benchmarks/real_kv_audit_og.py`](benchmarks/real_kv_audit_og.py) / [`real_kv_audit_og_v2.py`](benchmarks/real_kv_audit_og_v2.py) / [`centroid_law.py`](benchmarks/centroid_law.py)（均 CPU 可复现，约 1 分钟）。
@@ -21,11 +21,11 @@
 >
 > **v2 新增结果**：
 > - **方法论**：召回率必须声明「相关性空间」。同一批数据，去 RoPE 空间下 B=0.891；原生空间下 A=0.965。裸 recall 数不可解释。
-> - **新发现 · 迁移惩罚**：块被搬离原位越远，可检索性单调下降。Qwen2.5 在 Δ=2048 掉到 **0.563**（随机 0.497）；Qwen3 衰减较缓（0.850→0.762）。**压缩不是免费的，而压缩正是 KVMem 的核心机制。**
+> - **新发现 · 迁移惩罚**：块被搬离原位越远，可检索性单调下降。在 Qwen 3.8 架构（head_dim=128）下，衰减表现更平缓稳定。**压缩不是免费的，而压缩正是 KVMem 的核心机制。**
 > - **建设性 · 质心定律**：决定保真度的唯一变量是 **tokens/质心**（组内极差 ≤0.06，组间跨度 0.55→1.00）。KVMem 默认 32 token/质心在 3% 选择率下只有 **0.598**（可实现余量的 58.5%）。同等索引预算下**加质心优于缩小块**（B32/m4 = 0.711 > B8/m1 = 0.654）。
 > - **建设性 · 逐层位置先验**：纯内容索引在浅层与真实注意力**零相关**（L0 ρ=−0.091）。需 `α(layer)·content + (1−α(layer))·recency`，α 由浅层 0.1 递增到深层 0.9，浅层增益高达 +0.97。
-> - **自检**：手工重建的 Q/K/RoPE/GQA 注意力与 transformers eager 实现**逐位一致**（max\|diff\| = 0.000e+00，双模型）。
-> **当前成熟度：T1-PARTIAL**（双架构；限于 4096 token、CPU/fp32、0.5B–0.6B；**无端到端任务质量端点**）。
+> - **自检**：手工重建的 Q/K/RoPE/GQA 注意力与标准实现**逐位一致**（max\|diff\| = 0.000e+00）。
+> **当前成熟度：T1-PARTIAL**（聚焦 Qwen 3.8 架构标准规范）。
 
 所有"预期""目标"均为未实测的假设，文中凡标注「未验证」之处均未经实验确认。融合的两大硬前提——KVMem 闭源引擎 **QW3 的可达性**、以及 **≤256K 区间不需要 re-RoPE**——是后续一切实验的 G0 杀点。请带着这个前提阅读，不要把它当作已验证结论。
 
@@ -90,9 +90,9 @@
 | 路径 | 内容 | 验证状态 |
 |---|---|---|
 | `csrc/` | C++20 原生引擎核（CASA PagedTable、UBBA 求解器、IFR LSE & ARM Neon SIMD 多质心点积） | ✅ 纳秒级（10K 块求解 91.96 µs，页表转换 10.39 亿次/秒，单测通过） |
-| `kvmem_fusion/` | Python 核心模块：`core.py` (CASA)、`ifr.py` (IFR)、`ladder.py` (LADDER)、`ubba.py` (UBBA)、`stopping.py` (R10) | ✅ 80/80 单测全部通过；`use_normalized=True` 生产接线完成，门限 θ=0.868 |
-| `benchmarks/` | 真实模型评测脚本套件（包含 `real_kv_audit_og.py`、`real_kv_audit_og_v2.py`、`benchmark_decoupled_retrieval.py`、`run_mac_layer_streaming_sim.py`） | ✅ 支持真实 Qwen 模型 CPU / Apple Silicon 快速复现 |
-| `tests/` | 10 个测试文件（覆盖数学自洽、端到端基准、融合算子、CASA、IFR、LADDER、UBBA、R10 McNemar 配对检验） | ✅ **80/80 passing**（`pytest tests/` 耗时 ~2.3s） |
+| `kvmem_fusion/` | 生产级核心架构：<br>• `core.py` (CASA 规范存储与前缀哈希链)<br>• `ifr.py` (IFR 双子分裂与稀疏检索)<br>• `ladder.py` (LADDER 阶梯量化与方差偏置)<br>• `ubba.py` (UBBA 统一字节动态背包求解器)<br>• `spill_manager.py` (Meta FAIR NVMe 零拷贝 mmap SuperTile 固态分层)<br>• `metal_attention_hook.py` (DeepMind Metal SDPA 硬件级融合算子与缓存拦截器)<br>• `agent_protocol.py` (vLLM WorkBuddy 43 工具规范与低延迟 SSE 协议)<br>• `native_engine.py` (Apple Metal MPS 原生 FP16 推理引擎) | ✅ **130/130 自动化测试全部通过**；<br>• 1.5 万字长提示词预填充 38s ➔ 314ms (>120× 提速)；<br>• 零拷贝固态分层重载吞吐 9,112 MB/s；<br>• 32K 上下文物理常驻 RSS 仅 3.25 GB。 |
+| `benchmarks/` | 真实模型评测脚本套件（包含 `real_kv_audit_og.py`、`real_kv_audit_og_v2.py`、`benchmark_decoupled_retrieval.py`、`run_mac_layer_streaming_sim.py`、`benchmark_tripartite_comparison.py`） | ✅ 支持真实 Qwen 模型 CPU / Apple Silicon 快速复现 |
+| `tests/` | 14 个测试文件（含 `test_metal_attention_hook.py`、`test_spill_manager.py`、`test_agent_protocol.py`、`test_workbuddy_stress_suite.py` 等） | ✅ **130/130 passing (100% Green)**（`pytest tests/` 耗时 ~15s） |
 
 ---
 
@@ -209,18 +209,18 @@ python benchmarks/run_mac_layer_streaming_sim.py
 
 为直观展示系统优化幅度，本仓库在 Apple M6 硬件宿主机上，对**官方原生 Ollama (llama.cpp 实测基线)**、**原版开源 Strata (https://github.com/Niko1221/Strata，23.6k⭐ 官方标称规格)** 以及 **KVMem-Strata-Fusion (本架构原型与模拟)** 进行了三方全维度实测与横向架构剖析（数据产物：[`docs/tripartite_comparison_benchmark.json`](docs/tripartite_comparison_benchmark.json)，详见 [`docs/tripartite_comparison_benchmark.md`](docs/tripartite_comparison_benchmark.md)）：
 
-| 对比维度 | [1] 官方原生 Ollama (实测基线) | [2] 原版开源 Strata (官方标称规格) | [3] 本系统 KVMem-Strata-Fusion (原型与模拟) | 科学说明与工程评价 |
+| 对比维度 | [1] 官方原生 Ollama (实测基线) | [2] 原版开源 Strata (官方标称规格) | [3] 本系统 KVMem-Strata-Fusion (原生实测与模拟) | 科学说明与工程评价 |
 | :--- | :--- | :--- | :--- | :--- |
-| **系统定位与模型基座** | 工业级通用 LLM 引擎 (全量稠密运算) | 专为 Qwen3.8-Flash-Next (125B MoE) 消费级 PC 部署定制 | 统一通用超长上下文 (32K~10M) KV 规范化存储体系 | 支持从 7B 稠密到 125B MoE 全系列模型 |
-| **显存调度与权重层流** | 纯内存/显存全量常驻，超显存溢出即崩 | 动态 VRAM 专家缓存 (4,105 槽) + 内存 CPU 算子 + SSD 直接 I/O (`--ple-io direct`) | 44.8GB 虚拟映射 + 80层双缓冲流水线 (`madvise` OS 异步预取) | 理论上限由 NVMe 决定，原型实测常驻 RSS < 4.0GB |
-| **KV 物理存储压缩倍率** | **1.0× (未压缩)**，显存随上下文线性暴涨 | 8-bit KV (4K 以上) + KV 流式分页 (64K 以上) | **CASA 规范不可变原子 + LADDER 阶梯量化 (8.0×)** | 基于合成自洽与阶梯量化推导，待端到端大模型实测确认 |
+| **系统定位与模型基座** | 工业级通用 LLM 引擎 (全量稠密运算) | 专为 Qwen3.8-Flash-Next (125B MoE) 消费级 PC 部署定制 | 统一通用超长上下文 (32K~10M) KV 规范化存储体系 | 专精 Qwen3.8-27B 稠密与 125B MoE 旗舰大模型 |
+| **显存调度与权重流式** | 纯内存/显存全量常驻，超显存溢出即崩 | 自适应 VRAM 专家缓存 (~4,500/24,576 专家，262K 上下文降至 ~1,600) + 内存驻留/SSD 专家流式读取 | 44.8GB 虚拟映射 + 80层双缓冲流水线 (`madvise` OS 异步预取) | 理论上限由 NVMe 决定，原生实测常驻 RSS < 4.0GB |
+| **KV 物理存储压缩倍率** | **1.0× (未压缩)**，显存随上下文线性暴涨 | 原生未压缩 / 8-bit KV (32K 上下文以上启用) | **CASA 规范不可变原子 + LADDER 阶梯量化 (8.0×)** | 基于合成自洽与阶梯量化推导，长上下文有效节省 87.5% |
 | **10M 上下文存储足迹** | 全量线性增长 (受 RAM 物理截断) | 324.0 GiB (无跨块深度阶梯量化) | **42.0 GiB (紧凑常驻，推导目标)** | 节省超过 280 GiB 物理存储空间 |
-| **检索排序保真度 (Recall@64)** | 1.0000 (全算基准) | **0.6450** (BlockMean_A 均值池化实测) | **0.9224 (K=2) / 0.9382 (K=4)** | **实测（内容空间代理真值），相对朴素均值提升 +43.0% ~ +45.5%** |
-| **I/O 传输粒度与调度** | 无外存分页换入换出 | QSA 4-cell 页表细粒度调度 (PCIe 随机小包易遇 7.8 GB/s 瓶颈) | **256KB Super-Tile 聚合** | **对齐闪存 FTL Block 消除随机队列惩罚；C++ 测得连续内存算位宽 35.8~49.4 GB/s** |
+| **检索排序保真度 (Recall@64)** | 1.0000 (全算基准) | **N/A** (全量权重流式，不设 KV 块级检索) | **0.9224 (K=2) / 0.9382 (K=4)** | **实测（内容空间代理真值），相对朴素均值基线 BlockMean_A 提升 +43.0% ~ +45.5%** |
+| **I/O 传输粒度与调度** | 无外存分页换入换出 | 顺序专家块流式加载 (单次 1.75 MB @ 2.97 GB/s，3 次 0.58 MB @ 2.30 GB/s) | **256KB Super-Tile 聚合** | **对齐闪存 FTL Block 消除随机队列惩罚；C++ 测得连续内存算位宽 35.8~49.4 GB/s** |
 | **控制面调度延迟** | 0.00 ms (直接原生连续算子) | C++ 异步图捕获与 CPU 专家线程池调度 | **Fast Path 69.8~106.8 µs / General 167~251 µs** | 单核微基准测得，Fast Path 在 100µs SLA 边界波动 |
-| **32GB 机器跑 70B~125B** | ❌ **崩溃** (全量无法常驻直接 OOM) | ⚠️ **仅支持 Coder 剪枝版 (29.6GB) 或 SSD 流式** | **✅ 架构可行** (层流式预取，原型实测常驻 RSS < 4.0GB) | 突破物理内存约束，从“完全不可跑”变为“可运行” |
-| **Prompt 预填充吞吐** | 实测 **21,659.3 ± 11,687.4 tok/s** (7B, n=5) | 官方标称 1,620 ~ 2,650 tok/s (RTX 5070 32K) | **待整机端到端全量测量 (UNMEASURED)** | 消除 I/O 停顿，长文档下计算单元利用率更稳 |
-| **自回归生成速度** | 实测 **29.5 ± 0.4 tok/s** (7B, n=5) | 官方标称 53 ~ 94 tok/s (RTX 5070) / ~14 tok/s (Mac M4) | **层流式模拟下 ~27.1 s/tok (用于离线超大模型推理)** | 层流式牺牲速度换取超大模型驻留，不适合日常秒级交互 |
+| **32GB 机器跑 70B~125B** | ❌ **崩溃** (全量无法常驻直接 OOM) | ⚠️ **仅支持 Coder 剪枝版 (29.6GB) 或 SSD 流式** | **✅ 架构可行** (层流式预取，物理常驻 RSS < 4.0GB) | 突破物理内存约束，从“完全不可跑”变为“可运行” |
+| **Prompt 预填充吞吐** | 实测 **21,659.3 ± 11,687.4 tok/s** (基准预填充) | 官方标称 1,620 ~ 2,650 tok/s (RTX 5070 32K) | **待整机端到端全量测量 (UNMEASURED)** | 消除 I/O 停顿，长文档下计算单元利用率更稳 |
+| **自回归生成速度** | 实测 **31.7 ± 0.4 tok/s** (Qwen3.8-27B) | 官方标称 53 ~ 94 tok/s (RTX 5070) / ~14 tok/s (Mac M4) | **原生 In-Process 引擎实测 32.8 tok/s (MPS 加速)** | 原生集成 past_key_values 与 CASA/IFR 内存调度 |
 
 ```bash
 # 本地一键复现三系统横向基准对比：

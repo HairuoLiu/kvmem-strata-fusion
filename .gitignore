@@ -12,3 +12,13 @@
 build/
 bin/
 *.zip
+
+# Python & testing cache
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Server runtime logs and state
+server.log*
+server.pid
+*.log

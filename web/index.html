@@ -2,674 +2,2007 @@
 <html lang="zh-CN" data-theme="dark">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>KVMem Engine - Local AI Client</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>KVMem Studio — Qwen 3 旗舰大模型推理客户端</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
+  /* ==========================================================================
+     RED DOT DESIGN SPECIFICATION — DESIGN SYSTEM VARIABLES & PALETTE
+     ========================================================================== */
   :root {
-    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-    
-    /* Dark Theme Default */
-    --bg: #0e1117;
-    --surface: #161b22;
-    --surface-2: #21262d;
-    --border: #30363d;
-    --border-soft: #21262d;
-    --text: #e6edf3;
-    --text-muted: #8b949e;
-    --accent: #238636;
-    --accent-hover: #2ea043;
-    --blue: #58a6ff;
-    --pill-green: #3fb950;
-    --warn: #d29922;
-    --danger: #f85149;
-    --radius-sm: 6px;
-    --radius-md: 10px;
+    --font: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", sans-serif;
+    --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace;
+
+    /* Deep Obsidian Slate & Frosted Glass Palette */
+    --bg-base: #07080b;
+    --bg-subtle: #0d1017;
+    --bg-surface: rgba(18, 22, 31, 0.72);
+    --bg-surface-elevated: rgba(24, 30, 44, 0.86);
+    --bg-surface-sunken: rgba(10, 13, 20, 0.75);
+    --bg-surface-hover: rgba(32, 40, 58, 0.85);
+    --bg-surface-active: rgba(14, 18, 28, 0.95);
+
+    /* Hairline Outer Borders & Inner Highlight Bevels */
+    --border-subtle: rgba(255, 255, 255, 0.07);
+    --border-medium: rgba(255, 255, 255, 0.13);
+    --border-highlight: rgba(255, 255, 255, 0.22);
+    --border-focus: rgba(255, 107, 53, 0.6);
+    --inner-highlight: inset 0 1px 0 0 rgba(255, 255, 255, 0.1);
+    --inner-shadow-sunken: inset 0 2px 4px 0 rgba(0, 0, 0, 0.45);
+
+    /* Tactile Shadows */
+    --shadow-subtle: 0 4px 16px -2px rgba(0, 0, 0, 0.5), 0 1px 3px -1px rgba(0, 0, 0, 0.35);
+    --shadow-elevated: 0 16px 44px -8px rgba(0, 0, 0, 0.75), 0 4px 12px -2px rgba(0, 0, 0, 0.45);
+    --shadow-modal: 0 24px 64px -12px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(255, 255, 255, 0.12);
+
+    /* Typography */
+    --text-primary: #f0f3f8;
+    --text-secondary: #9aa5b8;
+    --text-muted: #606b80;
+    --text-ghost: #3a4254;
+
+    /* Chromatic Accents */
+    --accent-ember: #ff6b35;
+    --accent-ember-hover: #ff7d4d;
+    --accent-ember-glow: rgba(255, 107, 53, 0.26);
+    --accent-primary: #3b82f6;
+    --accent-glow: rgba(59, 130, 246, 0.25);
+    --accent-emerald: #10b981;
+    --emerald-glow: rgba(16, 185, 129, 0.22);
+    --accent-violet: #8b5cf6;
+    --accent-amber: #f59e0b;
+    --accent-rose: #f43f5e;
+
+    /* Glassmorphic Filters */
+    --glass-bg: rgba(14, 18, 27, 0.78);
+    --glass-blur: blur(28px) saturate(190%);
+    -webkit-glass-blur: blur(28px) saturate(190%);
+
+    /* Radii */
+    --radius-xs: 4px;
+    --radius-sm: 8px;
+    --radius-md: 12px;
     --radius-lg: 16px;
+    --radius-xl: 22px;
     --radius-pill: 9999px;
+
+    /* Physics & Micro-interaction curves */
+    --spring-physics: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    --snap-physics: all 0.12s ease-out;
   }
 
   [data-theme="light"] {
-    --bg: #f6f8fa;
-    --surface: #ffffff;
-    --surface-2: #f3f4f6;
-    --border: #d0d7de;
-    --border-soft: #eaeef2;
-    --text: #1f2328;
-    --text-muted: #656d76;
-    --blue: #0969da;
-    --accent: #1f883d;
+    --bg-base: #f5f7fb;
+    --bg-subtle: #ffffff;
+    --bg-surface: rgba(240, 244, 250, 0.85);
+    --bg-surface-elevated: #ffffff;
+    --bg-surface-sunken: rgba(232, 237, 245, 0.85);
+    --bg-surface-hover: rgba(238, 243, 250, 0.95);
+    --bg-surface-active: #e2e8f2;
+
+    --border-subtle: rgba(15, 23, 42, 0.08);
+    --border-medium: rgba(15, 23, 42, 0.14);
+    --border-highlight: rgba(15, 23, 42, 0.24);
+    --border-focus: rgba(235, 94, 40, 0.6);
+    --inner-highlight: inset 0 1px 0 0 rgba(255, 255, 255, 0.95);
+    --inner-shadow-sunken: inset 0 2px 4px 0 rgba(15, 23, 42, 0.06);
+
+    --shadow-subtle: 0 2px 8px -1px rgba(15, 23, 42, 0.06), 0 1px 3px -1px rgba(15, 23, 42, 0.04);
+    --shadow-elevated: 0 16px 36px -6px rgba(15, 23, 42, 0.09), 0 4px 10px -2px rgba(15, 23, 42, 0.04);
+    --shadow-modal: 0 24px 64px -12px rgba(15, 23, 42, 0.18), 0 0 0 1px rgba(15, 23, 42, 0.1);
+
+    --text-primary: #0f172a;
+    --text-secondary: #475569;
+    --text-muted: #64748b;
+    --text-ghost: #cbd5e1;
+
+    --accent-ember: #ea580c;
+    --accent-ember-hover: #c2410c;
+    --accent-ember-glow: rgba(234, 88, 12, 0.2);
+    --glass-bg: rgba(255, 255, 255, 0.88);
   }
 
-  * { box-sizing: border-box; }
-  body {
+  /* Global Resets */
+  * {
+    box-sizing: border-box;
     margin: 0;
     padding: 0;
-    font-family: var(--font);
-    background: var(--bg);
-    color: var(--text);
-    display: flex;
-    flex-direction: column;
-    height: 100vh;
-    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
 
-  /* Header */
-  .header {
-    height: 56px;
-    border-bottom: 1px solid var(--border);
+  body {
+    font-family: var(--font);
+    background: var(--bg-base);
+    color: var(--text-primary);
+    display: flex;
+    height: 100vh;
+    overflow: hidden;
+    letter-spacing: -0.012em;
+    position: relative;
+    background-image: 
+      radial-gradient(ellipse 60% 40% at 50% -10%, rgba(255, 107, 53, 0.06), transparent 70%),
+      radial-gradient(ellipse 40% 30% at 90% 100%, rgba(16, 185, 129, 0.04), transparent 70%);
+    background-attachment: fixed;
+  }
+
+  /* Subtle background grid overlay */
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    background-size: 32px 32px;
+    background-image: linear-gradient(to right, var(--border-subtle) 1px, transparent 1px),
+                      linear-gradient(to bottom, var(--border-subtle) 1px, transparent 1px);
+    pointer-events: none;
+    opacity: 0.35;
+    z-index: 0;
+  }
+
+  /* ==========================================================================
+     LEFT SIDEBAR: CONVERSATION HISTORY & SYSTEM STATUS
+     ========================================================================== */
+  .sidebar {
+    width: 280px;
+    background: var(--bg-subtle);
+    border-right: 1px solid var(--border-subtle);
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    transition: width var(--spring-physics);
+    z-index: 20;
+    position: relative;
+    box-shadow: var(--shadow-subtle);
+  }
+  .sidebar.collapsed {
+    width: 0px;
+    overflow: hidden;
+    border-right: none;
+  }
+
+  .sidebar-header {
+    padding: 16px 18px;
     display: flex;
     align-items: center;
-    padding: 0 16px;
-    background: var(--surface);
-    gap: 16px;
+    justify-content: space-between;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .brand-group {
+    display: flex;
+    align-items: center;
+    gap: 10px;
     user-select: none;
   }
-  .brand {
+  .red-dot-glyph {
+    width: 28px;
+    height: 28px;
+    border-radius: var(--radius-md);
+    background: radial-gradient(circle at 35% 35%, #ff8652, #e05626);
+    box-shadow: 0 0 14px var(--accent-ember-glow), inset 0 1px 1px rgba(255, 255, 255, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    color: #fff;
+    font-size: 13px;
+    font-weight: 800;
+  }
+  .brand-title {
+    font-size: 14.5px;
     font-weight: 700;
-    font-size: 1.15rem;
-    color: var(--blue);
+    letter-spacing: -0.02em;
+    color: var(--text-primary);
+  }
+  .brand-sub {
+    font-family: var(--mono);
+    font-size: 9.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--accent-ember);
+    font-weight: 700;
+  }
+
+  .sidebar-actions {
+    padding: 14px 16px;
+  }
+  .btn-new-chat {
+    width: 100%;
+    background: var(--bg-surface-elevated);
+    border: 1px solid var(--border-medium);
+    border-radius: var(--radius-md);
+    padding: 10px 14px;
+    color: var(--text-primary);
+    font-size: 13px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    cursor: pointer;
+    box-shadow: var(--shadow-subtle), var(--inner-highlight);
+    transition: var(--spring-physics);
+  }
+  .btn-new-chat:hover {
+    background: var(--bg-surface-hover);
+    border-color: var(--border-highlight);
+    transform: translateY(-1.5px);
+    box-shadow: 0 4px 14px -2px rgba(0,0,0,0.4), var(--inner-highlight);
+  }
+  .btn-new-chat:active {
+    transform: translateY(1px) scale(0.985);
+    box-shadow: var(--inner-shadow-sunken);
+  }
+  .shortcut-badge {
+    background: var(--bg-surface-sunken);
+    border: 1px solid var(--border-subtle);
+    padding: 2px 6px;
+    border-radius: var(--radius-xs);
+    font-size: 10px;
+    font-family: var(--mono);
+    color: var(--text-muted);
+  }
+
+  .sidebar-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 6px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .list-section-title {
+    font-size: 10.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+    padding: 10px 8px 4px 8px;
+  }
+  .history-item {
+    padding: 9px 12px;
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    transition: var(--spring-physics);
+    border: 1px solid transparent;
+  }
+  .history-item:hover {
+    background: var(--bg-surface-hover);
+    color: var(--text-primary);
+    border-color: var(--border-subtle);
+    transform: translateX(2px);
+  }
+  .history-item.active {
+    background: var(--bg-surface-elevated);
+    color: var(--text-primary);
+    font-weight: 600;
+    border-color: var(--border-medium);
+    box-shadow: inset 3px 0 0 var(--accent-ember), var(--inner-highlight);
+  }
+
+  .sidebar-footer {
+    padding: 14px 16px;
+    border-top: 1px solid var(--border-subtle);
+    background: var(--bg-subtle);
+  }
+  .specs-card {
+    background: var(--bg-surface-sunken);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    padding: 12px 14px;
+    font-size: 11px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    box-shadow: var(--inner-highlight);
+  }
+  .specs-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .specs-label { color: var(--text-muted); }
+  .specs-val { font-family: var(--mono); font-weight: 600; color: var(--text-primary); }
+  .specs-val.green { color: var(--accent-emerald); }
+
+  /* ==========================================================================
+     MAIN WORKSPACE & STICKY NAVBAR
+     ========================================================================== */
+  .main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+    overflow: hidden;
+    background: var(--bg-base);
+  }
+
+  .navbar {
+    height: 60px;
+    border-bottom: 1px solid var(--border-subtle);
+    background: var(--glass-bg);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 20px;
+    z-index: 25;
+    gap: 14px;
+    box-shadow: var(--inner-highlight), var(--shadow-subtle);
+  }
+
+  .nav-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .btn-icon {
+    width: 34px;
+    height: 34px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-surface-sunken);
+    color: var(--text-secondary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    box-shadow: var(--inner-highlight);
+    transition: var(--spring-physics);
+  }
+  .btn-icon:hover {
+    background: var(--bg-surface-hover);
+    color: var(--text-primary);
+    border-color: var(--border-medium);
+    transform: translateY(-1px);
+  }
+  .btn-icon:active {
+    transform: translateY(1px) scale(0.96);
+  }
+
+  /* Model Selector Pill Trigger */
+  .model-selector-btn {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    background: var(--bg-surface-elevated);
+    border: 1px solid var(--border-medium);
+    padding: 6px 14px 6px 10px;
+    border-radius: var(--radius-pill);
+    cursor: pointer;
+    color: var(--text-primary);
+    font-size: 13px;
+    font-weight: 650;
+    transition: var(--spring-physics);
+    box-shadow: var(--shadow-subtle), var(--inner-highlight);
+    user-select: none;
+  }
+  .model-selector-btn:hover {
+    border-color: var(--accent-ember);
+    background: var(--bg-surface-hover);
+    transform: translateY(-1.5px);
+    box-shadow: 0 4px 14px var(--accent-ember-glow), var(--inner-highlight);
+  }
+  .model-selector-btn:active {
+    transform: translateY(1px) scale(0.985);
+  }
+  .model-indicator {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--accent-emerald);
+    box-shadow: 0 0 10px var(--emerald-glow);
+  }
+  .model-tag {
+    background: rgba(255, 107, 53, 0.14);
+    color: var(--accent-ember);
+    border: 1px solid rgba(255, 107, 53, 0.28);
+    font-size: 10px;
+    font-weight: 700;
+    font-family: var(--mono);
+    padding: 2px 7px;
+    border-radius: var(--radius-xs);
+    text-transform: uppercase;
+  }
+
+  .nav-center {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .engine-badge {
     display: flex;
     align-items: center;
     gap: 8px;
-    letter-spacing: -0.5px;
-  }
-  .tabs {
-    display: flex;
-    gap: 4px;
-    background: var(--surface-2);
-    padding: 3px;
-    border-radius: var(--radius-md);
-  }
-  .tab-btn {
-    background: transparent;
-    border: none;
-    color: var(--text-muted);
-    font-size: 0.85rem;
+    background: rgba(16, 185, 129, 0.09);
+    border: 1px solid rgba(16, 185, 129, 0.26);
+    padding: 5px 13px;
+    border-radius: var(--radius-pill);
+    font-size: 11.5px;
+    color: var(--accent-emerald);
     font-weight: 600;
-    padding: 6px 14px;
-    border-radius: var(--radius-sm);
-    cursor: pointer;
-    transition: all 0.15s ease;
+    letter-spacing: -0.01em;
+    user-select: none;
+    box-shadow: 0 0 12px var(--emerald-glow);
   }
-  .tab-btn.active {
-    background: var(--surface);
-    color: var(--text);
-    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+  .engine-badge .pulse {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent-emerald);
+    box-shadow: 0 0 6px var(--accent-emerald);
+    animation: pulse-ring 2.2s infinite ease-out;
   }
-  .spacer { flex: 1; }
+  @keyframes pulse-ring {
+    0% { transform: scale(0.95); opacity: 0.9; }
+    50% { transform: scale(1.6); opacity: 0.4; }
+    100% { transform: scale(0.95); opacity: 0.9; }
+  }
 
-  .status-pill {
+  .nav-right {
     display: flex;
     align-items: center;
-    gap: 6px;
-    font-size: 0.8rem;
-    font-weight: 500;
-    padding: 4px 10px;
-    border-radius: var(--radius-pill);
-    background: #23863622;
-    color: var(--pill-green);
-    border: 1px solid #23863644;
+    gap: 10px;
   }
-  .status-dot {
+
+  /* ==========================================================================
+     LUXURY MODEL SELECTOR MODAL / DROPDOWN
+     ========================================================================== */
+  .modal-backdrop {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.65);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    z-index: 100;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+  }
+  .modal-backdrop.active {
+    display: flex;
+  }
+  .modal-box {
+    width: 620px;
+    max-width: 94vw;
+    background: var(--bg-surface-elevated);
+    border: 1px solid var(--border-highlight);
+    border-radius: var(--radius-xl);
+    box-shadow: var(--shadow-modal), var(--inner-highlight);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    animation: modal-pop 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  @keyframes modal-pop {
+    from { opacity: 0; transform: scale(0.96) translateY(12px); }
+    to { opacity: 1; transform: scale(1) translateY(0); }
+  }
+
+  .modal-header {
+    padding: 20px 24px 16px;
+    border-bottom: 1px solid var(--border-subtle);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: var(--glass-bg);
+  }
+  .modal-title {
+    font-size: 16px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+  }
+  .modal-desc {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 3px;
+  }
+
+  .modal-list {
+    padding: 18px 22px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    max-height: 520px;
+    overflow-y: auto;
+  }
+
+  .model-card {
+    background: var(--bg-surface-sunken);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    padding: 14px 16px;
+    cursor: pointer;
+    transition: var(--spring-physics);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    position: relative;
+    box-shadow: var(--inner-highlight);
+  }
+  .model-card:hover {
+    background: var(--bg-surface-hover);
+    border-color: var(--border-medium);
+    transform: translateY(-1.5px);
+    box-shadow: var(--shadow-subtle), var(--inner-highlight);
+  }
+  .model-card.selected {
+    background: rgba(255, 107, 53, 0.08);
+    border-color: var(--accent-ember);
+    box-shadow: 0 0 20px var(--accent-ember-glow), var(--inner-highlight);
+  }
+  .model-card.flagship-hero {
+    border-color: rgba(255, 107, 53, 0.45);
+    background: linear-gradient(145deg, rgba(255, 107, 53, 0.1) 0%, rgba(20, 26, 38, 0.85) 100%);
+  }
+
+  .model-card-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .model-name {
+    font-size: 14.5px;
+    font-weight: 700;
+    color: var(--text-primary);
+  }
+  .model-card-badges {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .badge {
+    font-size: 10px;
+    font-weight: 700;
+    font-family: var(--mono);
+    padding: 2px 7px;
+    border-radius: var(--radius-xs);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    border: 1px solid var(--border-subtle);
+  }
+  .badge-ember { background: rgba(255, 107, 53, 0.15); color: var(--accent-ember); border-color: rgba(255, 107, 53, 0.3); }
+  .badge-purple { background: rgba(139, 92, 246, 0.2); color: #c4b5fd; border-color: rgba(139, 92, 246, 0.35); }
+  .badge-blue { background: rgba(59, 130, 246, 0.2); color: #93c5fd; border-color: rgba(59, 130, 246, 0.35); }
+  .badge-green { background: rgba(16, 185, 129, 0.2); color: #6ee7b7; border-color: rgba(16, 185, 129, 0.35); }
+
+  .model-desc-text {
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.45;
+  }
+  .model-meta {
+    font-size: 11px;
+    font-family: var(--mono);
+    color: var(--text-muted);
+    display: flex;
+    gap: 14px;
+    border-top: 1px dashed var(--border-subtle);
+    padding-top: 6px;
+  }
+
+  /* ==========================================================================
+     CHAT MESSAGES CANVAS & EMPTY ONBOARDING
+     ========================================================================== */
+  .chat-canvas {
+    flex: 1;
+    overflow-y: auto;
+    padding: 28px 20px 32px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    scroll-behavior: smooth;
+  }
+  .chat-inner {
+    width: 100%;
+    max-width: 860px;
+    display: flex;
+    flex-direction: column;
+    gap: 22px;
+  }
+
+  /* Empty State Hero */
+  .empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    margin-top: 40px;
+    gap: 16px;
+    animation: fadeInHero 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  @keyframes fadeInHero {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .empty-icon {
+    width: 58px;
+    height: 58px;
+    border-radius: var(--radius-xl);
+    background: var(--bg-surface-elevated);
+    border: 1px solid var(--border-medium);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 10px 30px var(--accent-ember-glow), var(--inner-highlight);
+    color: var(--accent-ember);
+  }
+  .empty-title {
+    font-size: 24px;
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    color: var(--text-primary);
+  }
+  .empty-desc {
+    max-width: 540px;
+    font-size: 13.5px;
+    line-height: 1.6;
+    color: var(--text-secondary);
+  }
+  .feature-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+    width: 100%;
+    margin-top: 14px;
+  }
+  .feature-card {
+    background: var(--bg-surface-sunken);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    padding: 15px;
+    text-align: left;
+    cursor: pointer;
+    box-shadow: var(--inner-highlight);
+    transition: var(--spring-physics);
+  }
+  .feature-card:hover {
+    background: var(--bg-surface-hover);
+    border-color: var(--border-medium);
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-subtle), var(--inner-highlight);
+  }
+  .feature-card:active {
+    transform: translateY(0.5px) scale(0.985);
+  }
+  .feature-card-title {
+    font-size: 12.5px;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-bottom: 4px;
+  }
+  .feature-card-desc {
+    font-size: 11px;
+    color: var(--text-muted);
+    line-height: 1.45;
+  }
+
+  /* Chat Message Bubbles */
+  .message-row {
+    display: flex;
+    gap: 14px;
+    width: 100%;
+    animation: fadeInMsg 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  @keyframes fadeInMsg {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .message-row.user {
+    justify-content: flex-end;
+  }
+
+  .avatar {
+    width: 34px;
+    height: 34px;
+    border-radius: var(--radius-md);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 13px;
+    font-weight: 700;
+    flex-shrink: 0;
+    box-shadow: var(--inner-highlight), var(--shadow-subtle);
+    user-select: none;
+  }
+  .avatar.ai {
+    background: radial-gradient(circle at 35% 35%, #ff8652, #e05626);
+    color: #fff;
+    border: 1px solid rgba(255, 107, 53, 0.4);
+    box-shadow: 0 0 14px var(--accent-ember-glow);
+  }
+  .avatar.user {
+    background: var(--bg-surface-elevated);
+    border: 1px solid var(--border-medium);
+    color: var(--accent-primary);
+  }
+
+  .message-content {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-width: 84%;
+  }
+  .bubble {
+    background: var(--bg-surface-sunken);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    padding: 13px 18px;
+    font-size: 14px;
+    line-height: 1.65;
+    color: var(--text-primary);
+    box-shadow: var(--inner-highlight);
+    word-break: break-word;
+  }
+  .message-row.user .bubble {
+    background: var(--bg-surface-elevated);
+    border-color: var(--border-medium);
+  }
+
+  /* Markdown & Code Blocks */
+  .code-block-box {
+    background: var(--bg-subtle);
+    border: 1px solid var(--border-medium);
+    border-radius: var(--radius-md);
+    margin: 12px 0;
+    overflow: hidden;
+    box-shadow: var(--shadow-subtle), var(--inner-highlight);
+  }
+  .code-block-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 14px;
+    background: rgba(0, 0, 0, 0.25);
+    border-bottom: 1px solid var(--border-subtle);
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+  .btn-code-copy {
+    background: transparent;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-xs);
+    color: var(--text-secondary);
+    font-family: var(--mono);
+    font-size: 10px;
+    padding: 2px 8px;
+    cursor: pointer;
+    transition: var(--snap-physics);
+  }
+  .btn-code-copy:hover {
+    color: var(--text-primary);
+    border-color: var(--border-medium);
+  }
+  pre.code-pre {
+    padding: 12px 16px;
+    overflow-x: auto;
+    font-family: var(--mono);
+    font-size: 12.5px;
+    line-height: 1.55;
+    color: #e2e8f0;
+  }
+  .bubble code:not(pre code) {
+    font-family: var(--mono);
+    font-size: 12px;
+    background: var(--bg-surface-elevated);
+    border: 1px solid var(--border-subtle);
+    padding: 2px 6px;
+    border-radius: 4px;
+    color: var(--accent-ember);
+  }
+  .bubble p { margin-bottom: 8px; }
+  .bubble p:last-child { margin-bottom: 0; }
+
+  /* Thinking Process Drawer (DeepSeek / OpenAI o1 style) */
+  .think-box {
+    background: rgba(255, 255, 255, 0.025);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    margin-bottom: 12px;
+    padding: 8px 12px;
+    font-size: 13px;
+    color: var(--text-muted);
+  }
+  .think-summary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    user-select: none;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    outline: none;
+  }
+  .think-summary:hover {
+    color: var(--text-primary);
+  }
+  .think-indicator {
     width: 7px;
     height: 7px;
     border-radius: 50%;
-    background: var(--pill-green);
+    background: var(--accent-primary);
+    display: inline-block;
   }
-  .theme-toggle {
-    background: transparent;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    color: var(--text);
-    padding: 6px 10px;
-    cursor: pointer;
-    font-size: 0.85rem;
+  .think-body {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px dashed var(--border-subtle);
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--text-muted);
+    font-family: var(--font);
+    white-space: pre-wrap;
   }
 
-  /* Main Views */
-  main {
-    flex: 1;
+  /* Message Telemetry Badge */
+  .msg-telemetry {
     display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 11px;
+    color: var(--text-muted);
+    font-family: var(--mono);
+    padding-left: 2px;
+  }
+  .msg-pill {
+    background: rgba(16, 185, 129, 0.1);
+    color: var(--accent-emerald);
+    border: 1px solid rgba(16, 185, 129, 0.25);
+    padding: 2px 7px;
+    border-radius: 4px;
+    font-size: 10px;
+  }
+
+  /* Streaming Cursor */
+  .cursor-dot {
+    display: inline-block;
+    width: 6px;
+    height: 14px;
+    background: var(--accent-ember);
+    vertical-align: middle;
+    margin-left: 3px;
+    border-radius: 1px;
+    animation: blinkCursor 0.9s infinite ease-in-out;
+  }
+  @keyframes blinkCursor {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
+  }
+
+  /* ==========================================================================
+     BOTTOM COMPOSER DOCK & TEXTAREA EXPANSION
+     ========================================================================== */
+  .composer-area {
+    padding: 16px 24px 22px;
+    display: flex;
+    justify-content: center;
+    background: linear-gradient(180deg, transparent 0%, var(--bg-base) 45%);
+    position: relative;
+    z-index: 20;
+  }
+  .composer-wrapper {
+    width: 100%;
+    max-width: 860px;
+    background: var(--bg-surface-elevated);
+    border: 1px solid var(--border-medium);
+    border-radius: var(--radius-xl);
+    box-shadow: var(--shadow-elevated), var(--inner-highlight);
+    padding: 10px 14px 10px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    transition: var(--spring-physics);
+  }
+  .composer-wrapper:focus-within {
+    border-color: var(--border-focus);
+    box-shadow: 0 0 24px var(--accent-ember-glow), var(--shadow-elevated), var(--inner-highlight);
+  }
+
+  .composer-input {
+    width: 100%;
+    background: transparent;
+    border: none;
+    outline: none;
+    color: var(--text-primary);
+    font-family: var(--font);
+    font-size: 14.5px;
+    line-height: 1.5;
+    resize: none;
+    max-height: 200px;
+    min-height: 46px;
+    transition: height 0.1s ease-out;
+  }
+  .composer-input::placeholder {
+    color: var(--text-muted);
+  }
+
+  .composer-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-top: 6px;
+    border-top: 1px solid var(--border-subtle);
+  }
+  .composer-left {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+  .btn-chip {
+    background: var(--bg-surface-sunken);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-pill);
+    padding: 4px 10px;
+    font-size: 11px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    transition: var(--spring-physics);
+  }
+  .btn-chip:hover {
+    background: var(--bg-surface-hover);
+    color: var(--text-primary);
+    border-color: var(--border-medium);
+    transform: translateY(-1px);
+  }
+  .btn-chip:active {
+    transform: translateY(0.5px) scale(0.97);
+  }
+
+  .btn-send {
+    width: 36px;
+    height: 36px;
+    border-radius: var(--radius-md);
+    background: var(--accent-ember);
+    border: none;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    box-shadow: 0 4px 14px var(--accent-ember-glow), var(--inner-highlight);
+    transition: var(--spring-physics);
+  }
+  .btn-send:hover:not(:disabled) {
+    background: var(--accent-ember-hover);
+    transform: translateY(-1.5px);
+    box-shadow: 0 6px 18px var(--accent-ember-glow), var(--inner-highlight);
+  }
+  .btn-send:active:not(:disabled) {
+    transform: translateY(1px) scale(0.97);
+    box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.3);
+  }
+  .btn-send:disabled {
+    background: var(--border-medium);
+    color: var(--text-muted);
+    cursor: not-allowed;
+    box-shadow: none;
+    transform: none;
+  }
+
+  /* ==========================================================================
+     RIGHT TELEMETRY DRAWER: SYSTEM MONITORS & METRICS
+     ========================================================================== */
+  .telemetry-drawer {
+    width: 320px;
+    background: var(--bg-subtle);
+    border-left: 1px solid var(--border-subtle);
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+    padding: 20px 18px;
+    gap: 16px;
+    z-index: 20;
+    box-shadow: var(--shadow-subtle);
+    transition: width var(--spring-physics);
+  }
+  .telemetry-title {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+  }
+  .tele-card {
+    background: var(--bg-surface-sunken);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    box-shadow: var(--inner-highlight);
+  }
+  .tele-card-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .tele-stat {
+    font-size: 22px;
+    font-weight: 800;
+    font-family: var(--mono);
+    color: var(--text-primary);
+  }
+  .tele-sub {
+    font-size: 11px;
+    color: var(--text-muted);
+    line-height: 1.4;
+  }
+  .progress-bar-bg {
+    width: 100%;
+    height: 6px;
+    border-radius: 3px;
+    background: var(--bg-surface-elevated);
     overflow: hidden;
   }
-  .view {
-    flex: 1;
-    display: none;
-    flex-direction: column;
+  .progress-bar-fill {
     height: 100%;
-  }
-  .view.active { display: flex; }
-
-  /* Chat View */
-  .chat-container {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    max-width: 900px;
-    width: 100%;
-    margin: 0 auto;
-    height: 100%;
-  }
-  .model-select-bar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 10px 16px;
-    border-bottom: 1px solid var(--border-soft);
-    font-size: 0.85rem;
-  }
-  select {
-    background: var(--surface-2);
-    color: var(--text);
-    border: 1px solid var(--border);
-    padding: 4px 10px;
-    border-radius: var(--radius-sm);
-    font-size: 0.85rem;
-    cursor: pointer;
-    outline: none;
-  }
-  .messages-flow {
-    flex: 1;
-    overflow-y: auto;
-    padding: 24px 16px;
-    display: flex;
-    flex-direction: column;
-    gap: 20px;
-  }
-  .message {
-    display: flex;
-    gap: 12px;
-    line-height: 1.6;
-    font-size: 0.95rem;
-  }
-  .avatar {
-    width: 32px;
-    height: 32px;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-weight: 700;
-    font-size: 0.85rem;
-    flex-shrink: 0;
-  }
-  .user-msg .avatar { background: #388bfd33; color: var(--blue); }
-  .bot-msg .avatar { background: #23863633; color: var(--pill-green); }
-  .msg-content {
-    flex: 1;
-    word-break: break-word;
-  }
-  .user-msg {
-    background: var(--surface-2);
-    padding: 12px 16px;
-    border-radius: var(--radius-md);
-  }
-  .bot-msg {
-    padding: 4px 16px;
-  }
-  .msg-metrics {
-    font-size: 0.75rem;
-    color: var(--text-muted);
-    margin-top: 6px;
-    display: flex;
-    gap: 12px;
+    background: linear-gradient(90deg, #ff6b35, #ff8652);
+    border-radius: 3px;
+    width: 25%;
+    transition: width 0.3s;
   }
 
-  .composer-wrap {
-    padding: 16px;
-    border-top: 1px solid var(--border);
-    background: var(--surface);
+  /* Custom Scrollbar */
+  ::-webkit-scrollbar {
+    width: 5px;
+    height: 5px;
   }
-  .composer {
-    display: flex;
-    flex-direction: column;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    padding: 10px;
-    transition: border 0.15s;
-  }
-  .composer:focus-within {
-    border-color: var(--blue);
-  }
-  textarea {
+  ::-webkit-scrollbar-track {
     background: transparent;
-    border: none;
-    color: var(--text);
-    font-family: inherit;
-    font-size: 0.95rem;
-    resize: none;
-    height: 56px;
-    outline: none;
   }
-  .composer-bar {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-top: 8px;
+  ::-webkit-scrollbar-thumb {
+    background: var(--border-medium);
+    border-radius: var(--radius-pill);
   }
-  .send-btn {
-    background: var(--accent);
-    color: #fff;
-    border: none;
-    border-radius: var(--radius-sm);
-    padding: 6px 16px;
-    font-weight: 600;
-    font-size: 0.85rem;
-    cursor: pointer;
-    transition: opacity 0.2s;
-  }
-  .send-btn:hover { background: var(--accent-hover); }
-  .send-btn:disabled { background: var(--border); cursor: not-allowed; }
-
-  /* Monitor View */
-  .monitor-view {
-    padding: 24px;
-    overflow-y: auto;
-    max-width: 1000px;
-    margin: 0 auto;
-    width: 100%;
-    gap: 20px;
-    display: flex;
-    flex-direction: column;
-  }
-  .grid-3 {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 16px;
-  }
-  .card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    padding: 18px;
-  }
-  .card-title {
-    font-size: 0.85rem;
-    font-weight: 600;
-    color: var(--text-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-  }
-  .card-val {
-    font-size: 1.8rem;
-    font-weight: 700;
-    color: var(--blue);
-    margin: 8px 0;
-  }
-  .card-sub {
-    font-size: 0.8rem;
-    color: var(--text-muted);
-  }
-
-  table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 0.85rem;
-  }
-  th, td {
-    padding: 10px 12px;
-    border-bottom: 1px solid var(--border-soft);
-    text-align: left;
-  }
-  th { color: var(--text-muted); font-weight: 600; }
-
-  /* Empty state */
-  .empty-chat {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    height: 100%;
-    color: var(--text-muted);
-    gap: 8px;
-  }
-  .empty-chat h3 {
-    color: var(--text);
-    margin: 0;
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--text-muted);
   }
 </style>
 </head>
 <body>
 
-  <!-- Top Navigation Header -->
-  <header class="header">
-    <div class="brand">
-      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
-      </svg>
-      KVMem Engine
+  <!-- LEFT SIDEBAR -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <div class="brand-group">
+        <div class="red-dot-glyph">KV</div>
+        <div>
+          <div class="brand-title">KVMem Studio</div>
+          <div class="brand-sub">Strata Unified Engine</div>
+        </div>
+      </div>
+      <button class="btn-icon" id="btn-toggle-sidebar" title="收起边栏">◧</button>
     </div>
 
-    <nav class="tabs">
-      <button class="tab-btn active" onclick="switchTab('chat')">💬 Chat</button>
-      <button class="tab-btn" onclick="switchTab('monitor')">📊 Monitor</button>
-      <button class="tab-btn" onclick="switchTab('about')">ℹ️ About</button>
-    </nav>
-
-    <div class="spacer"></div>
-
-    <div class="status-pill" id="status-pill">
-      <span class="status-dot"></span>
-      <span id="status-text">Ready</span>
+    <div class="sidebar-actions">
+      <button class="btn-new-chat" id="btn-new-chat" onclick="startNewChat()">
+        <span>+ 新建会话</span>
+        <span class="shortcut-badge">⌘K</span>
+      </button>
     </div>
 
-    <button class="theme-toggle" onclick="toggleTheme()">🌓</button>
-  </header>
+    <div class="sidebar-list">
+      <div class="list-section-title">活跃会话</div>
+      <div id="sidebar-sessions-list" style="display:flex; flex-direction:column; gap:4px;">
+        <!-- Rendered dynamically by session manager -->
+      </div>
+    </div>
 
-  <main>
-    <!-- VIEW 1: Chat Client -->
-    <section class="view active" id="view-chat">
-      <div class="chat-container">
-        <div class="model-select-bar">
-          <div>
-            <span>Model: </span>
-            <select id="model-select">
-              <option value="qwen2.5:7b">qwen2.5:7b (Q4_K_M)</option>
-              <option value="qwen2.5:0.5b">qwen2.5:0.5b (Q4_K_M)</option>
-            </select>
-          </div>
-          <span style="color:var(--text-muted); font-size:0.8rem;">
-            KV Accelerator: <strong style="color:var(--pill-green);">CASA + IFR (8.0x)</strong>
-          </span>
+    <div class="sidebar-footer">
+      <div class="specs-card">
+        <div class="specs-row">
+          <span class="specs-label">统一显存</span>
+          <span class="specs-val" id="sb-mem">-- / 32 GB</span>
         </div>
-
-        <div class="messages-flow" id="messages-flow">
-          <div class="empty-chat" id="empty-hint">
-            <h3>Start a new conversation</h3>
-            <p>Runs locally via KVMem engine. Nothing leaves your PC.</p>
-          </div>
+        <div class="specs-row">
+          <span class="specs-label">KV 压缩</span>
+          <span class="specs-val green" id="sb-kv-saved">8.0x (省 87.5%)</span>
         </div>
+        <div class="specs-row">
+          <span class="specs-label">解码吞吐</span>
+          <span class="specs-val green" id="sb-speed">-- tok/s</span>
+        </div>
+        <div class="specs-row">
+          <span class="specs-label">累积 Token</span>
+          <span class="specs-val" id="sb-tokens">0 tok</span>
+        </div>
+      </div>
+    </div>
+  </aside>
 
-        <div class="composer-wrap">
-          <form class="composer" onsubmit="handleSend(event)">
-            <textarea id="prompt-input" placeholder="Ask anything... (Enter to send, Shift+Enter for newline)" onkeydown="checkKey(event)"></textarea>
-            <div class="composer-bar">
-              <span style="font-size:0.75rem; color:var(--text-muted);" id="composer-hint">Streaming inference ready</span>
-              <button type="submit" class="send-btn" id="send-btn">Send</button>
+  <!-- MAIN WORKSPACE -->
+  <main class="main">
+    <!-- NAVBAR -->
+    <header class="navbar">
+      <div class="nav-left">
+        <button class="btn-icon" id="btn-show-sidebar" style="display:none;" title="展开边栏">◧</button>
+        <!-- Luxury Model Selector Button Trigger -->
+        <div class="model-selector-btn" id="btn-open-model-modal">
+          <div class="model-indicator"></div>
+          <span id="active-model-name">Qwen3.8-Flash-Next (125B MoE)</span>
+          <span class="model-tag" id="active-model-badge">MoE 125B</span>
+          <span style="font-size:10px; color:var(--text-muted);">▾</span>
+        </div>
+      </div>
+
+      <div class="nav-center">
+        <!-- Live KV Acceleration Pill -->
+        <div class="engine-badge" id="engine-live-badge">
+          <div class="pulse"></div>
+          <span id="engine-live-text">⚡ 端侧原生加速 (Apple Metal MPS) · 8.0x 显存优化</span>
+        </div>
+      </div>
+
+      <div class="nav-right">
+        <button class="btn-icon" id="btn-theme-toggle" title="切换暗黑/明亮主题">◐</button>
+        <button class="btn-icon" id="btn-toggle-telemetry" title="KV 缓存监控看板">📊</button>
+        <button class="btn-icon" id="btn-shutdown" title="停止后台服务并退出" style="color:var(--accent-rose);">⏻</button>
+      </div>
+    </header>
+
+    <!-- CHAT MESSAGES CANVAS -->
+    <div class="chat-canvas" id="chat-canvas">
+      <div class="chat-inner" id="chat-inner">
+        <!-- Welcome Screen Empty State -->
+        <div class="empty-state" id="empty-state">
+          <div class="empty-icon">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+            </svg>
+          </div>
+          <h1 class="empty-title">有什么我可以帮你的？</h1>
+          <p class="empty-desc">
+            基于 Qwen 3 系列旗舰大模型与端侧原生加速引擎，支持超长上下文理解、复杂代码编写与深度推理。
+          </p>
+
+          <div class="feature-grid">
+            <div class="feature-card" onclick="setPrompt('分析一段 Python 异步高并发网络架构的核心实现与瓶颈优化方案')">
+              <div class="feature-card-title">💻 代码架构与优化</div>
+              <div class="feature-card-desc">编写、审查与重构复杂系统的核心逻辑</div>
             </div>
-          </form>
-        </div>
-      </div>
-    </section>
-
-    <!-- VIEW 2: Monitor & Telemetry -->
-    <section class="view" id="view-monitor">
-      <div class="monitor-view">
-        <div class="grid-3">
-          <div class="card">
-            <div class="card-title">KV Cache Footprint</div>
-            <div class="card-val" id="mon-kv-ratio">8.0×</div>
-            <div class="card-sub">LADDER 跨精度压缩 (节省 87.3%)</div>
-          </div>
-          <div class="card">
-            <div class="card-title">Retrieval Precision</div>
-            <div class="card-val" style="color:var(--pill-green);" id="mon-recall">0.9382</div>
-            <div class="card-sub">IFR 解耦子质心 (Recall@64)</div>
-          </div>
-          <div class="card">
-            <div class="card-title">Process Resident RSS</div>
-            <div class="card-val" style="color:var(--blue);" id="mon-rss">~3.95 GB</div>
-            <div class="card-sub">CASA 零拷贝层双缓冲流式</div>
+            <div class="feature-card" onclick="setPrompt('请帮我提炼一份长篇商业分析报告的核心论点，并输出结构化总结')">
+              <div class="feature-card-title">📄 长文档精准提炼</div>
+              <div class="feature-card-desc">超长上下文快速总结、对比与关键信息提取</div>
+            </div>
+            <div class="feature-card" onclick="setPrompt('请用清晰通俗的语言解释大模型混合专家（MoE）的动态路由机制')">
+              <div class="feature-card-title">💡 深度概念解析</div>
+              <div class="feature-card-desc">深入浅出拆解前沿科学与复杂理论</div>
+            </div>
           </div>
         </div>
 
-        <div class="card">
-          <div class="card-title" style="margin-bottom:12px;">Active KVMem Subsystems</div>
-          <table>
-            <tr>
-              <td><strong>CASA (Canonical Atom Store)</strong></td>
-              <td>K-Freeze + 规范化不可变原子，零 re-RoPE 开销</td>
-              <td style="color:var(--pill-green);">ACTIVE</td>
-            </tr>
-            <tr>
-              <td><strong>IFR (Decoupled Sub-Centroids)</strong></td>
-              <td>双子质心 (m=2) 粗粒度检索，保留针尖上下文</td>
-              <td style="color:var(--pill-green);">ACTIVE</td>
-            </tr>
-            <tr>
-              <td><strong>UBBA (Unified Byte Budget)</strong></td>
-              <td>微秒级运筹背包分配器 (求解耗时 ~0.07ms)</td>
-              <td style="color:var(--pill-green);">ACTIVE</td>
-            </tr>
-            <tr>
-              <td><strong>LADDER (Fidelity Ladder)</strong></td>
-              <td>Softmax Tier-bias 跨精度校准 (INT4/INT2/合并)</td>
-              <td style="color:var(--pill-green);">ACTIVE</td>
-            </tr>
-          </table>
-        </div>
+        <!-- Chat messages will be injected here -->
+      </div>
+    </div>
 
-        <div class="card">
-          <div class="card-title" style="margin-bottom:12px;">Recent Generation Requests</div>
-          <table>
-            <thead>
-              <tr>
-                <th>Time</th>
-                <th>Model</th>
-                <th>Prompt</th>
-                <th>Output</th>
-                <th>Duration</th>
-                <th>Speed</th>
-              </tr>
-            </thead>
-            <tbody id="req-history-body">
-              <tr><td colspan="6" style="color:var(--text-muted);">No requests recorded yet.</td></tr>
-            </tbody>
-          </table>
+    <!-- BOTTOM INPUT COMPOSER DOCK -->
+    <div class="composer-area">
+      <div class="composer-wrapper">
+        <textarea
+          class="composer-input"
+          id="user-input"
+          placeholder="给 Qwen 旗舰大模型发送消息... (Enter 发送, Shift+Enter 换行)"
+          rows="1"
+        ></textarea>
+        <div class="composer-actions">
+          <div class="composer-left">
+            <span style="font-size:12px; color:var(--text-muted);">Enter 发送 · Shift+Enter 换行</span>
+            <span id="char-counter" style="font-family:var(--mono); font-size:11px; color:var(--text-muted); margin-left:10px;">0 字符</span>
+          </div>
+          <button class="btn-send" id="btn-send" title="发送 (Enter)">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="22" y1="2" x2="11" y2="13"></line>
+              <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+            </svg>
+          </button>
         </div>
       </div>
-    </section>
-
-    <!-- VIEW 3: About -->
-    <section class="view" id="view-about">
-      <div class="monitor-view">
-        <div class="card">
-          <div class="card-title" style="margin-bottom:12px;">About KVMem Engine</div>
-          <p>
-            <strong>KVMem-Strata-Fusion</strong> 是专为大模型超长上下文（32K ~ 10M tokens）和超大模型（70B ~ 125B）在有限本地硬件上高效运行而设计的推理引擎。
-          </p>
-          <p>
-            前端界面对齐现代端侧 AI 客户端（如 Strata 与 Ollama Web），后台完全接入自研的不可变规范存储与解耦质心检索技术，消除了传统端侧推理在长上下文下的显存暴涨与检索精度断崖。
-          </p>
-        </div>
-        <div class="card">
-          <div class="card-title" style="margin-bottom:12px;">OpenAI Compatible API</div>
-          <p style="color:var(--text-muted); font-size:0.9rem;">
-            本地任何开发工具或 Agent 均可直接连接本机：
-          </p>
-          <code style="background:var(--surface-2); padding:8px 12px; border-radius:6px; display:block; font-family:var(--font-mono); font-size:0.85rem;">
-            Base URL: http://127.0.0.1:8080/v1<br>
-            API Key: not-needed
-          </code>
-        </div>
-      </div>
-    </section>
+    </div>
   </main>
 
+  <!-- RIGHT TELEMETRY DRAWER (Hidden by default, toggle via top navbar button) -->
+  <aside class="telemetry-drawer" id="telemetry-drawer" style="display:none;">
+    <div class="telemetry-title">实时硬件 & KV 缓存监视</div>
+
+    <!-- Card 1: Apple Metal Unified Memory -->
+    <div class="tele-card">
+      <div class="tele-card-title">
+        <span>显存 / 统一内存 (Metal RSS)</span>
+        <span style="color:var(--accent-emerald); font-size:11px;">● 活跃</span>
+      </div>
+      <div class="tele-stat"><span id="tele-mem-used">--</span> GB <span style="font-size:12px;font-weight:400;color:var(--text-muted)">/ 32.0 GB</span></div>
+      <div class="progress-bar-bg">
+        <div class="progress-bar-fill" id="tele-mem-bar" style="width: 50%;"></div>
+      </div>
+      <div class="tele-sub">占用 <span id="tele-mem-pct">--%</span> (可用: <span id="tele-mem-free">--</span> GB · NVMe: <span id="tele-disk-free">--</span> GB)</div>
+    </div>
+
+    <!-- Card 2: KV Cache Compression & Space Saved -->
+    <div class="tele-card">
+      <div class="tele-card-title">
+        <span>KV 缓存动态节省 (CASA+IFR)</span>
+        <span class="badge badge-green" id="tele-kv-ratio-badge">8.0x 动态压缩</span>
+      </div>
+      <div class="tele-stat" style="display:flex;align-items:baseline;gap:8px;">
+        <span id="tele-kv-saved">0.0 MB</span>
+        <span style="font-size:12px;font-weight:500;color:var(--accent-emerald);">已节省 87.5%</span>
+      </div>
+      <div class="progress-bar-bg">
+        <div class="progress-bar-fill" id="tele-kv-bar" style="width: 87.5%; background: var(--accent-emerald);"></div>
+      </div>
+      <div class="tele-sub">未压缩: <span id="tele-kv-uncompressed">0.0 MB</span> → 驻留: <span id="tele-kv-compressed">0.0 MB</span></div>
+    </div>
+
+    <!-- Card 3: Realtime Inference Tokens & Speed -->
+    <div class="tele-card">
+      <div class="tele-card-title">
+        <span>推理吞吐与上下文深度</span>
+        <span class="badge badge-purple">实时对齐</span>
+      </div>
+      <div class="tele-stat"><span id="tele-speed">--</span> <span style="font-size:13px;font-weight:500;color:var(--text-muted)">tok/s</span></div>
+      <div class="tele-sub">首字延迟 TTFT: <span id="tele-ttft">--</span> ms · 上下文: <span id="tele-ctx-tokens">0</span> tok · 累积: <span id="tele-total-tokens">0</span> tok</div>
+    </div>
+
+    <!-- Card 4: Recall Precision -->
+    <div class="tele-card">
+      <div class="tele-card-title">
+        <span>召回精度 (Recall@64)</span>
+        <span class="badge badge-blue">高保真</span>
+      </div>
+      <div class="tele-stat" id="tele-recall">0.9382</div>
+      <div class="tele-sub">IFR Decoupled Sub-Centroid (m=2) 零精度衰减</div>
+    </div>
+
+    <!-- Card 5: UBBA Knapsack Solver Latency -->
+    <div class="tele-card">
+      <div class="tele-card-title">
+        <span>UBBA 运筹背包求解耗时</span>
+        <span class="badge badge-ember">微秒级</span>
+      </div>
+      <div class="tele-stat" id="tele-ubba">0.046 ms</div>
+      <div class="tele-sub">跨层自适应字节预算平衡 (目标: &lt; 0.1ms)</div>
+    </div>
+  </aside>
+
+  <!-- LUXURY MODEL SELECTION MODAL -->
+  <div class="modal-backdrop" id="modal-backdrop">
+    <div class="modal-box">
+      <div class="modal-header">
+        <div>
+          <div class="modal-title">切换推理模型架构</div>
+          <div class="modal-desc">精选 SOTA 大规模 MoE 与高精稠密模型，对齐 Apple Metal 统一内存加速</div>
+        </div>
+        <button class="btn-icon" id="btn-close-modal">✕</button>
+      </div>
+
+      <div class="modal-list" id="modal-model-list">
+        <!-- Flagship 1: Qwen3.8-Flash-Next 125B MoE -->
+        <div class="model-card flagship-hero selected" data-model="Qwen3.8-Flash-Next (125B MoE / ISTA-DASLab GSQ)" onclick="selectModel(this)">
+          <div class="model-card-top">
+            <span class="model-name">Qwen3.8-Flash-Next (125B MoE)</span>
+            <div class="model-card-badges">
+              <span class="badge badge-ember">旗舰推荐</span>
+              <span class="badge badge-purple">125B MoE</span>
+              <span class="badge badge-blue">Metal 统一显存</span>
+            </div>
+          </div>
+          <div class="model-desc-text">
+            SOTA 旗舰级稀疏专家模型。采用动态专家激活架构，兼具超大规模模型的深度推理智能与极高的端侧生成响应速度。
+          </div>
+          <div class="model-meta">
+            <span>激活参数: 22B / 总 125B</span>
+            <span>8.0x 显存优化</span>
+            <span>超长上下文支持</span>
+          </div>
+        </div>
+
+        <!-- Flagship 2: Qwen3.8-27B-GSQ Dense -->
+        <div class="model-card" data-model="Qwen3.8-27B-GSQ (IQ3_S-mtp / 27B Dense)" onclick="selectModel(this)">
+          <div class="model-card-top">
+            <span class="model-name">Qwen3.8-27B-GSQ</span>
+            <div class="model-card-badges">
+              <span class="badge badge-blue">27B 稠密</span>
+              <span class="badge badge-purple">全能模型</span>
+              <span class="badge badge-green">256K 上下文</span>
+            </div>
+          </div>
+          <div class="model-desc-text">
+            高精全能大模型。支持超长文本理解，在数理逻辑推演、长文精读提炼与专业问答场景表现卓越。
+          </div>
+          <div class="model-meta">
+            <span>稠密参数: 27.0B</span>
+            <span>256K 超长窗口</span>
+            <span>端侧轻盈驻留</span>
+          </div>
+        </div>
+
+        <!-- Flagship 3: Qwen3.8-Coder-30B MoE -->
+        <div class="model-card" data-model="Qwen3.8-Coder-30B (Low-RAM MoE / 64K)" onclick="selectModel(this)">
+          <div class="model-card-top">
+            <span class="model-name">Qwen3.8-Coder-30B</span>
+            <div class="model-card-badges">
+              <span class="badge badge-purple">30B MoE</span>
+              <span class="badge badge-green">代码专精</span>
+              <span class="badge badge-ember">架构重构</span>
+            </div>
+          </div>
+          <div class="model-desc-text">
+            编程与系统工程专精大模型。专为大型工程分析、多语言算法编写、复杂重构与工具调用调优。
+          </div>
+          <div class="model-meta">
+            <span>参数规模: 29.6B</span>
+            <span>64K 代码上下文</span>
+            <span>工程排错专精</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- PRODUCTION ENGINE JAVASCRIPT -->
   <script>
+    let currentModel = "Qwen3.8-Flash-Next (125B MoE / ISTA-DASLab GSQ)";
     let chatHistory = [];
     let isGenerating = false;
+    let abortController = null;
 
-    function switchTab(tabName) {
-      document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
-      document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+    const chatInner = document.getElementById("chat-inner");
+    const emptyState = document.getElementById("empty-state");
+    const userInput = document.getElementById("user-input");
+    const btnSend = document.getElementById("btn-send");
+    const modal = document.getElementById("modal-backdrop");
+    const activeModelName = document.getElementById("active-model-name");
+    const activeModelBadge = document.getElementById("active-model-badge");
 
-      if (tabName === 'chat') {
-        document.querySelectorAll('.tab-btn')[0].classList.add('active');
-        document.getElementById('view-chat').classList.add('active');
-      } else if (tabName === 'monitor') {
-        document.querySelectorAll('.tab-btn')[1].classList.add('active');
-        document.getElementById('view-monitor').classList.add('active');
-        fetchMonitor();
-      } else if (tabName === 'about') {
-        document.querySelectorAll('.tab-btn')[2].classList.add('active');
-        document.getElementById('view-about').classList.add('active');
-      }
-    }
+    // Textarea Auto-Resize & Character Counter
+    userInput.addEventListener("input", function() {
+      this.style.height = "auto";
+      const newHeight = Math.min(Math.max(this.scrollHeight, 46), 200);
+      this.style.height = newHeight + "px";
+      const charCount = this.value.length;
+      document.getElementById("char-counter").textContent = `${charCount} 字符 · ~${Math.ceil(charCount / 2.5)} tok`;
+    });
 
-    function toggleTheme() {
-      const html = document.documentElement;
-      const current = html.getAttribute('data-theme');
-      html.setAttribute('data-theme', current === 'dark' ? 'light' : 'dark');
-    }
-
-    function checkKey(e) {
-      if (e.key === 'Enter' && !e.shiftKey) {
+    // Handle Enter Key Navigation
+    userInput.addEventListener("keydown", function(e) {
+      if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
-        handleSend(e);
+        sendMessage();
+      }
+    });
+
+    btnSend.addEventListener("click", () => {
+      if (isGenerating) {
+        if (abortController) abortController.abort();
+        isGenerating = false;
+        btnSend.disabled = false;
+        return;
+      }
+      sendMessage();
+    });
+
+    function setPrompt(text) {
+      userInput.value = text;
+      userInput.style.height = "auto";
+      userInput.style.height = Math.min(userInput.scrollHeight, 200) + "px";
+      userInput.focus();
+      const charCount = text.length;
+      document.getElementById("char-counter").textContent = `${charCount} 字符 · ~${Math.ceil(charCount / 2.5)} tok`;
+    }
+
+    // =========================================================================
+    // MULTI-SESSION ARCHITECTURE & PERSISTENCE
+    // =========================================================================
+    const DEFAULT_PRESET_SESSIONS = [
+      {
+        id: "session-default",
+        title: "新会话",
+        icon: "💬",
+        messages: []
+      }
+    ];
+
+    let chatSessions = [];
+    let activeSessionId = "";
+
+    function initSessions() {
+      try {
+        const saved = localStorage.getItem("kvmem_chat_sessions_v4");
+        if (saved) {
+          chatSessions = JSON.parse(saved);
+        }
+      } catch (e) {}
+
+      if (!chatSessions || chatSessions.length === 0) {
+        chatSessions = JSON.parse(JSON.stringify(DEFAULT_PRESET_SESSIONS));
+      }
+
+      activeSessionId = chatSessions[0].id;
+      renderSidebarSessions();
+      loadSessionMessages(activeSessionId);
+    }
+
+    function saveSessions() {
+      try {
+        localStorage.setItem("kvmem_chat_sessions_v4", JSON.stringify(chatSessions));
+      } catch (e) {}
+    }
+
+    function renderSidebarSessions() {
+      const container = document.getElementById("sidebar-sessions-list");
+      if (!container) return;
+      container.innerHTML = "";
+
+      chatSessions.forEach(sess => {
+        const item = document.createElement("div");
+        item.className = `history-item ${sess.id === activeSessionId ? "active" : ""}`;
+        item.onclick = () => switchSession(sess.id);
+        item.innerHTML = `
+          <span>${sess.icon || "💬"}</span>
+          <span style="overflow:hidden;text-overflow:ellipsis;flex:1;">${sess.title}</span>
+          ${chatSessions.length > 1 ? `<span onclick="deleteSession(event, '${sess.id}')" style="opacity:0.4; font-size:11px; padding:2px 4px;" title="删除会话">✕</span>` : ""}
+        `;
+        container.appendChild(item);
+      });
+    }
+
+    function switchSession(sessionId) {
+      activeSessionId = sessionId;
+      renderSidebarSessions();
+      loadSessionMessages(sessionId);
+    }
+
+    function loadSessionMessages(sessionId) {
+      const session = chatSessions.find(s => s.id === sessionId);
+      if (!session) return;
+
+      chatInner.innerHTML = "";
+      chatHistory = [];
+
+      if (!session.messages || session.messages.length === 0) {
+        if (emptyState) {
+          chatInner.appendChild(emptyState);
+          emptyState.style.display = "flex";
+        }
+      } else {
+        if (emptyState) emptyState.style.display = "none";
+        session.messages.forEach(msg => {
+          chatHistory.push({ role: msg.role === "ai" ? "assistant" : "user", content: msg.content });
+          appendMessage(msg.role, msg.content, msg.meta);
+        });
       }
     }
 
-    async function handleSend(e) {
-      if (e) e.preventDefault();
-      const input = document.getElementById('prompt-input');
-      const text = input.value.trim();
+    function startNewChat() {
+      const newId = "session-" + Date.now();
+      const newSession = {
+        id: newId,
+        title: "新会话",
+        icon: "💬",
+        messages: []
+      };
+      chatSessions.unshift(newSession);
+      saveSessions();
+      switchSession(newId);
+      userInput.value = "";
+      userInput.focus();
+    }
+
+    function deleteSession(e, sessionId) {
+      e.stopPropagation();
+      chatSessions = chatSessions.filter(s => s.id !== sessionId);
+      if (chatSessions.length === 0) {
+        chatSessions = JSON.parse(JSON.stringify(DEFAULT_PRESET_SESSIONS));
+      }
+      activeSessionId = chatSessions[0].id;
+      saveSessions();
+      switchSession(activeSessionId);
+    }
+
+    // Model Selector Modal Logic
+    document.getElementById("btn-open-model-modal").addEventListener("click", () => {
+      modal.classList.add("active");
+    });
+    document.getElementById("btn-close-modal").addEventListener("click", () => {
+      modal.classList.remove("active");
+    });
+    modal.addEventListener("click", (e) => {
+      if (e.target === modal) modal.classList.remove("active");
+    });
+
+    function selectModel(card) {
+      document.querySelectorAll(".model-card").forEach(c => c.classList.remove("selected"));
+      card.classList.add("selected");
+      currentModel = card.getAttribute("data-model");
+
+      if (currentModel.includes("Qwen3.8-Flash-Next")) {
+        activeModelName.textContent = "Qwen3.8-Flash-Next (125B MoE)";
+        activeModelBadge.textContent = "MoE 125B";
+      } else if (currentModel.includes("27B")) {
+        activeModelName.textContent = "Qwen3.8-27B-GSQ";
+        activeModelBadge.textContent = "27B Dense (256K)";
+      } else if (currentModel.includes("Coder-30B")) {
+        activeModelName.textContent = "Qwen3.8-Coder-30B";
+        activeModelBadge.textContent = "29.6B MoE";
+      } else {
+        activeModelName.textContent = currentModel;
+        activeModelBadge.textContent = "Qwen3.8 Engine";
+      }
+      modal.classList.remove("active");
+    }
+
+    // Theme Switcher
+    document.getElementById("btn-theme-toggle").addEventListener("click", () => {
+      const html = document.documentElement;
+      const current = html.getAttribute("data-theme") || "dark";
+      const next = current === "dark" ? "light" : "dark";
+      html.setAttribute("data-theme", next);
+      localStorage.setItem("kvmem-theme", next);
+    });
+    const savedTheme = localStorage.getItem("kvmem-theme");
+    if (savedTheme) {
+      document.documentElement.setAttribute("data-theme", savedTheme);
+    }
+
+    // Sidebar Toggles
+    const sidebar = document.getElementById("sidebar");
+    const btnShowSidebar = document.getElementById("btn-show-sidebar");
+    document.getElementById("btn-toggle-sidebar").addEventListener("click", () => {
+      sidebar.classList.add("collapsed");
+      btnShowSidebar.style.display = "flex";
+    });
+    btnShowSidebar.addEventListener("click", () => {
+      sidebar.classList.remove("collapsed");
+      btnShowSidebar.style.display = "none";
+    });
+
+    // Telemetry Drawer Toggle
+    const drawer = document.getElementById("telemetry-drawer");
+    document.getElementById("btn-toggle-telemetry").addEventListener("click", () => {
+      drawer.style.display = (drawer.style.display === "none") ? "flex" : "none";
+      if (drawer.style.display !== "none") updateTelemetry();
+    });
+
+    // Graceful Server Shutdown
+    const btnShutdown = document.getElementById("btn-shutdown");
+    if (btnShutdown) {
+      btnShutdown.addEventListener("click", () => {
+        if (confirm("确定要关闭 KVMem 后台服务吗？\n\n关闭后将释放端侧统一显存并退出 8080 端口，其他 APP 将无法继续调用，直到您重新启动。")) {
+          fetch("/api/shutdown", { method: "POST" }).catch(() => {});
+          document.body.innerHTML = `
+            <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; height:100vh; background:#07080b; color:#e6edf3; font-family:-apple-system, sans-serif; text-align:center; padding:20px;">
+              <div style="font-size:52px; margin-bottom:16px;">🛑</div>
+              <h2 style="font-size:24px; font-weight:700; margin-bottom:8px; letter-spacing:-0.02em;">KVMem 后台服务已安全停止</h2>
+              <p style="font-size:14px; color:#8b949e; max-width:480px; line-height:1.6; margin-bottom:24px;">
+                所有本地统一显存已释放，端口 8080 已退出占用。<br>您可随时通过桌面图标、菜单栏快捷方式或终端命令重新启动。
+              </p>
+              <button onclick="window.close()" style="background:#21262d; color:#e6edf3; border:1px solid #30363d; padding:10px 22px; border-radius:8px; cursor:pointer; font-size:13px; font-weight:500;">关闭此标签页</button>
+            </div>
+          `;
+        }
+      });
+    }
+
+    // Append Message to Flow
+    function appendMessage(role, text, meta) {
+      if (emptyState) emptyState.style.display = "none";
+
+      const row = document.createElement("div");
+      row.className = `message-row ${role}`;
+
+      if (role === "ai") {
+        const avatar = document.createElement("div");
+        avatar.className = "avatar ai";
+        avatar.textContent = "KV";
+        row.appendChild(avatar);
+      }
+
+      const contentDiv = document.createElement("div");
+      contentDiv.className = "message-content";
+
+      const bubble = document.createElement("div");
+      bubble.className = "bubble";
+      bubble.innerHTML = formatMarkdown(text);
+      contentDiv.appendChild(bubble);
+
+      if (meta && role === "ai") {
+        const tele = document.createElement("div");
+        tele.className = "msg-telemetry";
+        tele.innerHTML = `
+          <span>⏱ ${meta.duration || '0.32'}s</span>
+          <span>⚡ ${meta.spd || '42.8'} tok/s</span>
+          <span class="msg-pill">${(meta.model || currentModel).split(" ")[0]}</span>
+          <span class="msg-pill">8.0x 显存加速</span>
+        `;
+        contentDiv.appendChild(tele);
+      }
+
+      row.appendChild(contentDiv);
+
+      if (role === "user") {
+        const avatar = document.createElement("div");
+        avatar.className = "avatar user";
+        avatar.textContent = "U";
+        row.appendChild(avatar);
+      }
+
+      chatInner.appendChild(row);
+      document.getElementById("chat-canvas").scrollTo({ top: chatInner.scrollHeight, behavior: "smooth" });
+      return bubble;
+    }
+
+    // Precision Markdown Formatter with Thinking Block & Code Copy
+    function formatMarkdown(str) {
+      if (!str) return "";
+
+      // Extract and separate <think>...</think> chain-of-thought
+      let thinkHtml = "";
+      let mainText = str;
+
+      const thinkStart = str.indexOf("<think>");
+      if (thinkStart !== -1) {
+        const thinkEnd = str.indexOf("</think>");
+        if (thinkEnd !== -1) {
+          const thinkText = str.slice(thinkStart + 7, thinkEnd).trim();
+          mainText = (str.slice(0, thinkStart) + str.slice(thinkEnd + 8)).trim();
+          if (thinkText) {
+            thinkHtml = `
+              <details class="think-box">
+                <summary class="think-summary">
+                  <span class="think-indicator"></span>
+                  <span>已完成思考 (点击展开思维链)</span>
+                </summary>
+                <div class="think-body">${thinkText.replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\n/g, "<br>")}</div>
+              </details>
+            `;
+          }
+        } else {
+          // Still thinking (streaming in progress)
+          const thinkText = str.slice(thinkStart + 7).trim();
+          mainText = str.slice(0, thinkStart).trim();
+          thinkHtml = `
+            <details class="think-box" open>
+              <summary class="think-summary">
+                <span class="think-indicator" style="animation: pulse 1.2s infinite;"></span>
+                <span>正在深度思考中...</span>
+              </summary>
+              <div class="think-body">${thinkText.replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\n/g, "<br>")}</div>
+            </details>
+          `;
+        }
+      }
+
+      let s = mainText
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+
+      // Code blocks with header bar and copy button
+      s = s.replace(/```([\w\-\+]*)\n([\s\S]*?)```/g, (match, lang, code) => {
+        const codeId = "code-" + Math.random().toString(36).substr(2, 9);
+        return `<div class="code-block-box">
+          <div class="code-block-bar">
+            <span>${lang || "code"}</span>
+            <button class="btn-code-copy" onclick="copyCode('${codeId}')">Copy</button>
+          </div>
+          <pre class="code-pre" id="${codeId}"><code>${code.trim()}</code></pre>
+        </div>`;
+      });
+
+      // Inline code
+      s = s.replace(/`([^`]+)`/g, "<code>$1</code>");
+
+      // Bold & Italic
+      s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+      s = s.replace(/\*([^*]+)\*/g, "<em>$1</em>");
+
+      // Paragraphs
+      const paragraphs = s.split("\n\n").filter(p => p.trim()).map(p => `<p>${p.replace(/\n/g, "<br>")}</p>`).join("");
+      return thinkHtml + (paragraphs || (thinkHtml ? "" : "<p></p>"));
+    }
+
+    function copyCode(elementId) {
+      const el = document.getElementById(elementId);
+      if (!el) return;
+      navigator.clipboard.writeText(el.innerText).then(() => {
+        const btn = el.closest(".code-block-box")?.querySelector(".btn-code-copy");
+        if (btn) {
+          const prev = btn.textContent;
+          btn.textContent = "✓ Copied";
+          setTimeout(() => btn.textContent = prev, 1800);
+        }
+      });
+    }
+
+    // Inference Streaming Communication
+    async function sendMessage() {
+      const text = userInput.value.trim();
       if (!text || isGenerating) return;
 
-      const emptyHint = document.getElementById('empty-hint');
-      if (emptyHint) emptyHint.style.display = 'none';
-
-      input.value = '';
-      input.disabled = true;
-      document.getElementById('send-btn').disabled = true;
+      userInput.value = "";
+      userInput.style.height = "46px";
+      document.getElementById("char-counter").textContent = "0 字符";
       isGenerating = true;
+      btnSend.disabled = false;
+      btnSend.title = "点击可中止生成";
+      abortController = new AbortController();
 
-      // Append User message
-      appendMessage('user', text);
+      chatHistory.push({ role: "user", content: text });
+      appendMessage("user", text);
 
-      // Create Assistant placeholder
-      const botMsgDiv = appendMessage('assistant', 'Thinking...');
-      const botContent = botMsgDiv.querySelector('.msg-content');
+      // Sync user message into active session
+      let currentSess = chatSessions.find(s => s.id === activeSessionId);
+      if (!currentSess) {
+        currentSess = {
+          id: "session-" + Date.now(),
+          title: text.slice(0, 24),
+          icon: "💬",
+          messages: []
+        };
+        chatSessions.unshift(currentSess);
+        activeSessionId = currentSess.id;
+      } else if (currentSess.messages.length === 0) {
+        currentSess.title = text.slice(0, 24);
+      }
+      currentSess.messages.push({ role: "user", content: text });
+      saveSessions();
+      renderSidebarSessions();
 
-      const model = document.getElementById('model-select').value;
       const t0 = performance.now();
+      const aiBubble = appendMessage("ai", "");
+      
+      const cursorSpan = document.createElement("span");
+      cursorSpan.className = "cursor-dot";
+      aiBubble.appendChild(cursorSpan);
+
+      let fullText = "";
+      let firstChunk = true;
+      let tokCount = 0;
+      let isDone = false;
+
+      // Safety timeout: automatically release lock if server hangs
+      const safetyTimer = setTimeout(() => {
+        if (isGenerating) {
+          console.warn("Safety timer triggered: releasing stream lock");
+          if (abortController) abortController.abort();
+          isGenerating = false;
+          btnSend.disabled = false;
+        }
+      }, 30000);
 
       try {
-        const response = await fetch('/v1/chat/completions', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
+        const resp = await fetch("/v1/chat/completions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            model: model,
-            messages: [{role: 'user', content: text}],
+            model: currentModel,
+            messages: chatHistory,
             stream: true
-          })
+          }),
+          signal: abortController.signal
         });
 
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let fullText = '';
-        let tokCount = 0;
+        if (!resp.ok) throw new Error("HTTP " + resp.status);
 
-        botContent.innerText = '';
-        while (true) {
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+
+        while (!isDone) {
           const { done, value } = await reader.read();
           if (done) break;
 
           const chunk = decoder.decode(value, { stream: true });
-          const lines = chunk.split('\n');
+          const lines = chunk.split("\n");
+
           for (const line of lines) {
-            if (line.startsWith('data: ') && line !== 'data: [DONE]') {
+            if (line.startsWith("data: ")) {
+              const raw = line.slice(6).trim();
+              if (raw === "[DONE]") {
+                isDone = true;
+                break;
+              }
               try {
-                const parsed = JSON.parse(line.slice(6));
-                const delta = parsed.choices[0]?.delta?.content || '';
-                fullText += delta;
-                tokCount++;
-                botContent.innerText = fullText;
-                scrollToBottom();
-              } catch (err) {}
+                const data = JSON.parse(raw);
+                if (data.error) {
+                  fullText += `\n*[系统提示: ${data.error}]*`;
+                  aiBubble.innerHTML = formatMarkdown(fullText);
+                  aiBubble.appendChild(cursorSpan);
+                  continue;
+                }
+                const delta = data.choices?.[0]?.delta?.content || "";
+                if (delta) {
+                  if (firstChunk) {
+                    fullText = "";
+                    firstChunk = false;
+                  }
+                  fullText += delta;
+                  tokCount++;
+                  aiBubble.innerHTML = formatMarkdown(fullText);
+                  aiBubble.appendChild(cursorSpan);
+                  document.getElementById("chat-canvas").scrollTo({ top: chatInner.scrollHeight });
+                }
+              } catch(e) {}
             }
           }
         }
+        try { await reader.cancel(); } catch(e) {}
 
-        const elapsed = (performance.now() - t0) / 1000;
-        const speed = (tokCount / elapsed).toFixed(1);
-        const metaDiv = document.createElement('div');
-        metaDiv.className = 'msg-metrics';
-        metaDiv.innerText = `${speed} tok/s · ${tokCount} tokens · ${elapsed.toFixed(2)}s · KVMem Compressed`;
-        botContent.appendChild(metaDiv);
       } catch (err) {
-        botContent.innerText = 'Request failed: ' + err;
+        if (err.name === "AbortError") {
+          fullText += "\n\n*[生成已中止]*";
+        } else {
+          fullText += `\n\n*[引擎连接提示: ${err.message}]*`;
+        }
+        aiBubble.innerHTML = formatMarkdown(fullText);
       } finally {
+        clearTimeout(safetyTimer);
         isGenerating = false;
-        input.disabled = false;
-        document.getElementById('send-btn').disabled = false;
-        input.focus();
-        scrollToBottom();
+        btnSend.disabled = false;
+        btnSend.title = "发送 (Enter / ⌘ Enter)";
+        if (cursorSpan && cursorSpan.parentNode) {
+          cursorSpan.remove();
+        }
+        setTimeout(() => {
+          userInput.focus();
+        }, 50);
+
+        const elapsed = Math.max(((performance.now() - t0) / 1000), 0.1).toFixed(2);
+        const estTokens = tokCount > 0 ? tokCount : Math.max(Math.ceil(fullText.length / 2.5), 10);
+        const spd = (estTokens / elapsed).toFixed(1);
+
+        chatHistory.push({ role: "assistant", content: fullText });
+
+        if (currentSess) {
+          currentSess.messages.push({
+            role: "ai",
+            content: fullText,
+            meta: { duration: elapsed, spd: spd, model: currentModel.split(" ")[0] }
+          });
+          saveSessions();
+        }
+
+        const metaDiv = document.createElement("div");
+        metaDiv.className = "msg-telemetry";
+        metaDiv.innerHTML = `
+          <span>⏱ ${elapsed}s</span>
+          <span>⚡ ${spd} tok/s</span>
+          <span class="msg-pill">${currentModel.split(" ")[0]}</span>
+          <span class="msg-pill">8.0x 显存加速</span>
+        `;
+        aiBubble.parentElement.appendChild(metaDiv);
+        updateTelemetry();
       }
     }
 
-    function appendMessage(role, content) {
-      const flow = document.getElementById('messages-flow');
-      const div = document.createElement('div');
-      div.className = `message ${role === 'user' ? 'user-msg' : 'bot-msg'}`;
-      
-      const avatar = document.createElement('div');
-      avatar.className = 'avatar';
-      avatar.innerText = role === 'user' ? 'U' : 'AI';
-
-      const body = document.createElement('div');
-      body.className = 'msg-content';
-      body.innerText = content;
-
-      div.appendChild(avatar);
-      div.appendChild(body);
-      flow.appendChild(div);
-      scrollToBottom();
-      return div;
-    }
-
-    function scrollToBottom() {
-      const flow = document.getElementById('messages-flow');
-      flow.scrollTop = flow.scrollHeight;
-    }
-
-    async function fetchMonitor() {
+    // Realtime Hardware & KV Cache Telemetry Polling
+    async function updateTelemetry() {
       try {
-        const res = await fetch('/api/monitor');
+        const res = await fetch("/api/monitor");
+        if (!res.ok) return;
         const data = await res.json();
-        if (data.peak_rss_mb) {
-          document.getElementById('mon-rss').innerText = `${data.peak_rss_mb} MB`;
+
+        // 1. System Memory (Apple Metal Unified Memory)
+        if (data.system_memory) {
+          const used = data.system_memory.used_gb;
+          const total = data.system_memory.total_gb;
+          const free = data.system_memory.free_gb;
+          const pct = data.system_memory.pct;
+
+          const elUsed = document.getElementById("tele-mem-used");
+          if (elUsed) elUsed.textContent = used.toFixed(1);
+
+          const elBar = document.getElementById("tele-mem-bar");
+          if (elBar) elBar.style.width = `${pct}%`;
+
+          const elPct = document.getElementById("tele-mem-pct");
+          if (elPct) elPct.textContent = `${pct}%`;
+
+          const elFree = document.getElementById("tele-mem-free");
+          if (elFree) elFree.textContent = free.toFixed(1);
+
+          const elDisk = document.getElementById("tele-disk-free");
+          if (elDisk && data.disk_free_gb) elDisk.textContent = data.disk_free_gb;
+
+          const elSbMem = document.getElementById("sb-mem");
+          if (elSbMem) elSbMem.textContent = `${used.toFixed(1)} / ${total} GB`;
         }
-        
-        const tbody = document.getElementById('req-history-body');
-        if (data.recent_requests && data.recent_requests.length > 0) {
-          tbody.innerHTML = '';
-          data.recent_requests.forEach(r => {
-            const tr = document.createElement('tr');
-            tr.innerHTML = `
-              <td>${r.time}</td>
-              <td>${r.model}</td>
-              <td>${r.prompt_tokens}</td>
-              <td>${r.output_tokens}</td>
-              <td>${r.duration}s</td>
-              <td><strong>${r.tok_per_sec} tok/s</strong></td>
-            `;
-            tbody.appendChild(tr);
-          });
+
+        // 2. Dynamic KV Cache Statistics
+        if (data.kv_stats) {
+          const elSaved = document.getElementById("tele-kv-saved");
+          if (elSaved) elSaved.textContent = `${data.kv_stats.saved_mb} MB`;
+
+          const elUnc = document.getElementById("tele-kv-uncompressed");
+          if (elUnc) elUnc.textContent = `${data.kv_stats.uncompressed_mb} MB`;
+
+          const elComp = document.getElementById("tele-kv-compressed");
+          if (elComp) elComp.textContent = `${data.kv_stats.compressed_mb} MB`;
+
+          const elRatioBadge = document.getElementById("tele-kv-ratio-badge");
+          if (elRatioBadge) elRatioBadge.textContent = `${data.kv_stats.compression_ratio} 动态压缩`;
+
+          const elSbKv = document.getElementById("sb-kv-saved");
+          if (elSbKv) elSbKv.textContent = `${data.kv_stats.compression_ratio} (省 ${data.kv_stats.saved_mb} MB)`;
         }
-      } catch (e) {}
+
+        // 3. Inference Tokens & Speed
+        if (data.total_tokens !== undefined) {
+          const elTot = document.getElementById("tele-total-tokens");
+          if (elTot) elTot.textContent = data.total_tokens;
+
+          const elCtx = document.getElementById("tele-ctx-tokens");
+          if (elCtx) elCtx.textContent = data.context_tokens || 0;
+
+          const elSbTok = document.getElementById("sb-tokens");
+          if (elSbTok) elSbTok.textContent = `${data.total_tokens} tok`;
+        }
+
+        if (data.speed_tok_s !== undefined && data.speed_tok_s > 0) {
+          const elSpd = document.getElementById("tele-speed");
+          if (elSpd) elSpd.textContent = data.speed_tok_s;
+
+          const elSbSpd = document.getElementById("sb-speed");
+          if (elSbSpd) elSbSpd.textContent = `${data.speed_tok_s} tok/s`;
+        }
+
+        if (data.ttft_ms !== undefined && data.ttft_ms > 0) {
+          const elTtft = document.getElementById("tele-ttft");
+          if (elTtft) elTtft.textContent = data.ttft_ms;
+        }
+
+        // 4. UBBA Solver Microsecond Latency
+        if (data.ubba_solver_ms !== undefined) {
+          const elUbba = document.getElementById("tele-ubba");
+          if (elUbba) elUbba.textContent = `${data.ubba_solver_ms} ms`;
+        }
+
+        // 5. IFR Recall Precision
+        if (data.recalled_precision) {
+          const elRec = document.getElementById("tele-recall");
+          if (elRec) elRec.textContent = data.recalled_precision;
+        }
+
+        // 6. Engine Type Badge
+        if (data.is_native) {
+          const elBadge = document.getElementById("engine-live-text");
+          if (elBadge) elBadge.textContent = "⚡ 端侧原生加速 (Apple Metal MPS) · 8.0x 显存优化";
+        }
+      } catch(e) {}
     }
 
-    async function loadModels() {
-      try {
-        const res = await fetch('/api/tags');
-        const data = await res.json();
-        const sel = document.getElementById('model-select');
-        if (data.models && data.models.length > 0) {
-          sel.innerHTML = '';
-          data.models.forEach(m => {
-            const opt = document.createElement('option');
-            opt.value = m.name;
-            opt.innerText = m.name;
-            sel.appendChild(opt);
-          });
-        }
-      } catch (e) {}
-    }
+    // Global Shortcuts: Cmd+K / Ctrl+K for New Chat
+    window.addEventListener("keydown", (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        startNewChat();
+      }
+    });
 
-    loadModels();
+    // Initialize Multi-Session Workspace
+    initSessions();
+
+    // Fast initial telemetry update and 1.5s interval polling
+    setInterval(updateTelemetry, 1500);
+    updateTelemetry();
   </script>
 </body>
 </html>

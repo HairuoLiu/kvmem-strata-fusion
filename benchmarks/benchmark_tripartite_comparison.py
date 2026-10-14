@@ -98,7 +98,7 @@ def query_ollama(model_name: str, prompt: str, num_predict: int = 64, repeats: i
     }
 
 
-def run_tripartite_benchmark(model_id: str = "qwen2.5:7b", out_json: str = "docs/tripartite_comparison_benchmark.json"):
+def run_tripartite_benchmark(model_id: str = "Qwen3.8-27B", out_json: str = "docs/tripartite_comparison_benchmark.json"):
     print("=" * 80)
     print("TRIPARTITE COMPARISON BENCHMARK SUITE (STRICT BASELINE MEASURED)")
     print(f"Host: {platform.system()} {platform.machine()} ({platform.processor() or 'Apple Silicon'})")
