@@ -25,6 +25,7 @@
    - [`og_audit_752df3d.md`](og_audit_752df3d.md): 对 release 整合提交（752df3d）的独立审计（含复现脚本 [`og_repro_752df3d/`](og_repro_752df3d/)）。
    - [`og_audit_49e3f52.md`](og_audit_49e3f52.md): 对基准标注整改 + einsum 向量化 + Web 客户端上线（48917ae–49e3f52）的独立审计。
    - [`og_challenge_49e3f52.md`](og_challenge_49e3f52.md): 对上述 4 个提交的正式质询书（12 项逐项举证要求 + 回应表 + 计分板）。
+   - [`og_audit_native_engine_20261014.md`](og_audit_native_engine_20261014.md): **（最新）** 对原生引擎版本（工作区未提交改动）的独立审计。核心结论：上一轮"主体偷换"已实质修复（原生引擎实测可跑、MPS fp16、28 个注意力模块挂 Metal SDPA hook），C4 八项编造 Strata 参数已修七项；**但 IFR 检索在服务路径中从未被调用**——`update()` 返回完整 KV（稠密全注意力），`retrieve()` 唯一调用点只在 `spill_manager.py` 且该模块仅被 `tests/` 引用；另有零流量预置遥测（TTFT 预置 166ms vs 实测 500.6ms，3.02×）、`81920` bytes/token 魔数（真实 114688，低报 29%）、27B 权重为空壳实际加载 0.6B、head_dim 64 vs 真实 128 截断等问题。附 P0/P1/P2 整改清单与 Q1–Q12 逐项举证表。审计方向由「数字合规」转向「方法真实性」。
    - [`og_track_a_v3_cleanup_compare_optimize.md`](og_track_a_v3_cleanup_compare_optimize.md): 清理清单、对比方案与本地运行目标规范。
 
 5. **执行日志与归档资料**：
