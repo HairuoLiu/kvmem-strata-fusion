@@ -24,6 +24,7 @@
    - [`og_audit_tripartite_8d88c3b.md`](og_audit_tripartite_8d88c3b.md): 对三系统横向对比基准（8d88c3b/7efc5b5）的独立审计。
    - [`og_audit_752df3d.md`](og_audit_752df3d.md): 对 release 整合提交（752df3d）的独立审计（含复现脚本 [`og_repro_752df3d/`](og_repro_752df3d/)）。
    - [`og_audit_49e3f52.md`](og_audit_49e3f52.md): 对基准标注整改 + einsum 向量化 + Web 客户端上线（48917ae–49e3f52）的独立审计。
+   - [`og_challenge_49e3f52.md`](og_challenge_49e3f52.md): 对上述 4 个提交的正式质询书（12 项逐项举证要求 + 回应表 + 计分板）。
    - [`og_track_a_v3_cleanup_compare_optimize.md`](og_track_a_v3_cleanup_compare_optimize.md): 清理清单、对比方案与本地运行目标规范。
 
 5. **执行日志与归档资料**：
