@@ -1153,6 +1153,9 @@
       </div>
 
       <div class="nav-right">
+        <button class="btn-icon" id="btn-new-chat-top" onclick="startNewChat()" title="开启新会话 / 清空上下文" style="font-size:12px; font-weight:600; width:auto; padding:0 12px; gap:6px; display:inline-flex; align-items:center; border:1px solid var(--border-medium); border-radius:var(--radius-sm); background:var(--bg-surface-elevated); cursor:pointer;">
+          <span style="font-size:14px;">＋</span> <span>新对话</span>
+        </button>
         <button class="btn-icon" id="btn-theme-toggle" title="切换暗黑/明亮主题">◐</button>
         <button class="btn-icon" id="btn-toggle-telemetry" title="KV 缓存监控看板">📊</button>
         <button class="btn-icon" id="btn-shutdown" title="停止后台服务并退出" style="color:var(--accent-rose);">⏻</button>
@@ -1486,7 +1489,15 @@
       } else {
         if (emptyState) emptyState.style.display = "none";
         session.messages.forEach(msg => {
-          chatHistory.push({ role: msg.role === "ai" ? "assistant" : "user", content: msg.content });
+          let c = msg.content;
+          if (msg.role === "ai") {
+            c = c.replace(/<think>[\s\S]*?(?:<\/think>|$)/g, "")
+                 .replace(/\*\[(?:生成已中止|生成已中断|已中断|引擎连接提示)[^\]]*\]\*/g, "")
+                 .trim();
+          }
+          if (c) {
+            chatHistory.push({ role: msg.role === "ai" ? "assistant" : "user", content: c });
+          }
           appendMessage(msg.role, msg.content, msg.meta);
         });
       }
@@ -1676,14 +1687,16 @@
             `;
           }
         } else {
-          // Still thinking (streaming in progress)
-          const thinkText = str.slice(thinkStart + 7).trim();
-          mainText = str.slice(0, thinkStart).trim();
+          // Still thinking or generation aborted before closing tag
+          const rawRemain = str.slice(thinkStart + 7);
+          const isInterrupted = str.includes("已中止") || str.includes("已中断");
+          const thinkText = rawRemain.replace(/\*\[(?:生成已中止|生成已中断|已中断|引擎连接提示)[^\]]*\]\*/g, "").trim();
+          mainText = (str.slice(0, thinkStart) + (isInterrupted ? "\n\n*[生成已中断]*" : "")).trim();
           thinkHtml = `
-            <details class="think-box" open>
+            <details class="think-box" ${isInterrupted ? "" : "open"}>
               <summary class="think-summary">
-                <span class="think-indicator" style="animation: pulse 1.2s infinite;"></span>
-                <span>正在深度思考中...</span>
+                <span class="think-indicator" style="${isInterrupted ? 'background:#f85149;' : 'animation: pulse 1.2s infinite;'}"></span>
+                <span>${isInterrupted ? '思考过程 (已中断)' : '正在深度思考中...'}</span>
               </summary>
               <div class="think-body">${thinkText.replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\n/g, "<br>")}</div>
             </details>
@@ -1881,7 +1894,13 @@
         const estTokens = tokCount > 0 ? tokCount : Math.max(Math.ceil(fullText.length / 2.5), 10);
         const spd = (estTokens / elapsed).toFixed(1);
 
-        chatHistory.push({ role: "assistant", content: fullText });
+        const cleanContent = fullText
+          .replace(/<think>[\s\S]*?(?:<\/think>|$)/g, "")
+          .replace(/\*\[(?:生成已中止|生成已中断|已中断|引擎连接提示)[^\]]*\]\*/g, "")
+          .trim();
+        if (cleanContent) {
+          chatHistory.push({ role: "assistant", content: cleanContent });
+        }
 
         if (currentSess) {
           currentSess.messages.push({

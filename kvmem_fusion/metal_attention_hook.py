@@ -521,11 +521,13 @@ class MetalKVCacheInterceptor(DynamicCache):
         num_blocks = total_seq_len // self.block_size
         b_ids = self.layer_block_ids.get(0, [])
         for b_idx in range(min(num_blocks, len(b_ids))):
+            bid = b_ids[b_idx]
+            blk = self.atom_store.blocks.get(bid)
+            if blk is not None and layer_idx in blk.layer_raw_k:
+                continue
             start_pos = b_idx * self.block_size
             end_pos = start_pos + self.block_size
             if end_pos <= keys.shape[-2]:
-                bid = b_ids[b_idx]
-                blk = self.atom_store.blocks.get(bid)
                 if blk is not None:
                     k_block = keys[0, :, start_pos:end_pos, :]
                     v_block = values[0, :, start_pos:end_pos, :]
