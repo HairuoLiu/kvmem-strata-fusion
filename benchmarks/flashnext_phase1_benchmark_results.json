@@ -1,0 +1,85 @@
+{
+  "hardware": "Apple Silicon (MPS)",
+  "precision": "torch.float16",
+  "linear_36_layers_total_us": 1373.31,
+  "results": [
+    {
+      "context_tokens": 4096,
+      "num_blocks": 128,
+      "mean_retrieval_ms": 0.048,
+      "p95_retrieval_ms": 0.07,
+      "bounded_attended_tokens": 1792,
+      "sparsity_ratio": 0.4375,
+      "compute_reduction_pct": 56.2,
+      "qsa_kv_resident_mb": 48.0,
+      "dense_kv_baseline_mb": 1536.0,
+      "total_resident_ram_gb": 6.48,
+      "fits_in_32gb": true
+    },
+    {
+      "context_tokens": 8192,
+      "num_blocks": 256,
+      "mean_retrieval_ms": 0.127,
+      "p95_retrieval_ms": 0.272,
+      "bounded_attended_tokens": 2048,
+      "sparsity_ratio": 0.25,
+      "compute_reduction_pct": 75.0,
+      "qsa_kv_resident_mb": 48.0,
+      "dense_kv_baseline_mb": 3072.0,
+      "total_resident_ram_gb": 6.48,
+      "fits_in_32gb": true
+    },
+    {
+      "context_tokens": 16384,
+      "num_blocks": 512,
+      "mean_retrieval_ms": 0.144,
+      "p95_retrieval_ms": 0.173,
+      "bounded_attended_tokens": 2048,
+      "sparsity_ratio": 0.125,
+      "compute_reduction_pct": 87.5,
+      "qsa_kv_resident_mb": 48.0,
+      "dense_kv_baseline_mb": 6144.0,
+      "total_resident_ram_gb": 6.48,
+      "fits_in_32gb": true
+    },
+    {
+      "context_tokens": 32768,
+      "num_blocks": 1024,
+      "mean_retrieval_ms": 0.337,
+      "p95_retrieval_ms": 0.39,
+      "bounded_attended_tokens": 2048,
+      "sparsity_ratio": 0.0625,
+      "compute_reduction_pct": 93.8,
+      "qsa_kv_resident_mb": 48.0,
+      "dense_kv_baseline_mb": 12288.0,
+      "total_resident_ram_gb": 6.48,
+      "fits_in_32gb": true
+    },
+    {
+      "context_tokens": 65536,
+      "num_blocks": 2048,
+      "mean_retrieval_ms": 0.581,
+      "p95_retrieval_ms": 0.687,
+      "bounded_attended_tokens": 2048,
+      "sparsity_ratio": 0.0312,
+      "compute_reduction_pct": 96.9,
+      "qsa_kv_resident_mb": 48.0,
+      "dense_kv_baseline_mb": 24576.0,
+      "total_resident_ram_gb": 6.49,
+      "fits_in_32gb": true
+    },
+    {
+      "context_tokens": 131072,
+      "num_blocks": 4096,
+      "mean_retrieval_ms": 1.352,
+      "p95_retrieval_ms": 1.754,
+      "bounded_attended_tokens": 2048,
+      "sparsity_ratio": 0.0156,
+      "compute_reduction_pct": 98.4,
+      "qsa_kv_resident_mb": 48.0,
+      "dense_kv_baseline_mb": 49152.0,
+      "total_resident_ram_gb": 6.5,
+      "fits_in_32gb": true
+    }
+  ]
+}
