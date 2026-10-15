@@ -25,7 +25,7 @@ import urllib.request
 import threading
 import resource
 import platform
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
 PORT = 8080
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -147,6 +147,12 @@ class KVMemAppHandler(BaseHTTPRequestHandler):
 
     def log_message(self, format, *args):
         pass
+
+    def handle_one_request(self):
+        try:
+            super().handle_one_request()
+        except (BrokenPipeError, ConnectionResetError):
+            self.close_connection = True
 
     def send_cors_headers(self):
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -489,9 +495,14 @@ class KVMemAppHandler(BaseHTTPRequestHandler):
         self.send_error(404, "Not Found")
 
 
+class ThreadedKVMemServer(ThreadingHTTPServer):
+    daemon_threads = True
+    allow_reuse_address = True
+
+
 def run_server():
     server_address = ("127.0.0.1", PORT)
-    httpd = HTTPServer(server_address, KVMemAppHandler)
+    httpd = ThreadedKVMemServer(server_address, KVMemAppHandler)
     print("=" * 70)
     print(f"🚀 KVMem AI Studio is running at: http://127.0.0.1:{PORT}")
     print("=" * 70)

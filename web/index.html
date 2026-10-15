@@ -1779,15 +1779,15 @@
       let tokCount = 0;
       let isDone = false;
 
-      // Safety timeout: automatically release lock if server hangs
-      const safetyTimer = setTimeout(() => {
+      // Adaptive watchdog timeout: automatically release lock if server hangs with no tokens
+      let safetyTimer = setTimeout(() => {
         if (isGenerating) {
           console.warn("Safety timer triggered: releasing stream lock");
           if (abortController) abortController.abort();
           isGenerating = false;
           btnSend.disabled = false;
         }
-      }, 30000);
+      }, 120000);
 
       try {
         const resp = await fetch("/v1/chat/completions", {
@@ -1833,6 +1833,18 @@
                   if (firstChunk) {
                     fullText = "";
                     firstChunk = false;
+                  }
+                  // Reset watchdog on each incoming token
+                  if (safetyTimer) {
+                    clearTimeout(safetyTimer);
+                    safetyTimer = setTimeout(() => {
+                      if (isGenerating) {
+                        console.warn("Inactivity watchdog triggered");
+                        if (abortController) abortController.abort();
+                        isGenerating = false;
+                        btnSend.disabled = false;
+                      }
+                    }, 60000);
                   }
                   fullText += delta;
                   tokCount++;

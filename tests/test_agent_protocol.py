@@ -255,6 +255,25 @@ def test_streaming_tool_processor_plain_text():
     assert chunks[-1]["choices"][0]["finish_reason"] == "stop"
 
 
+def test_streaming_tool_processor_with_think_tags_and_tools_enabled():
+    """Verify that <think> tags and math < symbols stream immediately even when tools are enabled."""
+    proc = StreamingToolProcessor(req_id="test-think", model="qwen3.8", tools_enabled=True)
+    chunks = [proc.emit_initial()]
+
+    # Simulate tokens streamed from Qwen3: <think>\nAnalyzing x < 5...\n</think>\nResult
+    tokens = ["<think>", "\n", "Analyzing", " x ", "<", " 5", "...\n", "</think>", "\n", "Result"]
+    for tok in tokens:
+        new_chunks = proc.process_token(tok)
+        chunks.extend(new_chunks)
+    chunks.extend(proc.flush())
+
+    contents = [c["choices"][0]["delta"].get("content", "") for c in chunks if "content" in c["choices"][0]["delta"]]
+    full_emitted = "".join(contents)
+    assert "<think>\nAnalyzing x < 5...\n</think>\nResult" in full_emitted
+    # Assert that chunks were streamed incrementally (not all deferred to flush)
+    assert len(chunks) >= 8
+
+
 def test_streaming_tool_processor_with_tool_call():
     proc = StreamingToolProcessor(req_id="test-2", model="qwen3.8", tools_enabled=True)
     chunks = [proc.emit_initial()]

@@ -227,7 +227,7 @@ class KVMemNativeEngine:
 
         # 3. High-Speed Autoregressive Decode Loop using MetalKVCacheInterceptor
         generated_tokens = 0
-        eos_token_id = self.tokenizer.eos_token_id
+        stop_tokens = {self.tokenizer.eos_token_id, 151645, 151643}
 
         with torch.no_grad():
             # Initial hardware-fused Metal SDPA prefill pass
@@ -250,7 +250,7 @@ class KVMemNativeEngine:
             self.active_doublets_split = interceptor.active_doublets_split
 
             tok_val = next_token.item()
-            if tok_val != eos_token_id:
+            if tok_val not in stop_tokens:
                 token_text = self.tokenizer.decode([tok_val], skip_special_tokens=True)
                 generated_tokens += 1
                 if isinstance(past_key_values, MetalKVCacheInterceptor):
@@ -276,7 +276,7 @@ class KVMemNativeEngine:
                             next_token = torch.argmax(next_token_logits, dim=-1, keepdim=True)
 
                         tok_val = next_token.item()
-                        if tok_val == eos_token_id:
+                        if tok_val in stop_tokens:
                             break
 
                         if isinstance(past_key_values, MetalKVCacheInterceptor):

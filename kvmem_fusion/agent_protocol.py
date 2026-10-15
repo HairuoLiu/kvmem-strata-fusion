@@ -476,12 +476,22 @@ class StreamingToolProcessor:
                     })
                 self.buffer = after_tag
         else:
-            # Safe forward streaming: if buffer does not contain partial '<' tag, flush safely
-            if "<" not in self.buffer:
-                if len(self.buffer) > 1:
-                    flush_text = self.buffer[:-1]
-                    self.buffer = self.buffer[-1]
+            # Safe forward streaming: only hold back if trailing characters match a prefix of '<tool_call>'
+            tool_prefix = "<tool_call>"
+            hold_len = 0
+            for i in range(1, min(len(tool_prefix), len(self.buffer) + 1)):
+                if tool_prefix.startswith(self.buffer[-i:]):
+                    hold_len = i
+
+            if hold_len > 0:
+                flush_text = self.buffer[:-hold_len]
+                self.buffer = self.buffer[-hold_len:]
+                if flush_text:
                     chunks.append(create_content_delta_chunk(self.req_id, self.model, flush_text))
+            else:
+                if self.buffer:
+                    chunks.append(create_content_delta_chunk(self.req_id, self.model, self.buffer))
+                    self.buffer = ""
 
         return chunks
 
