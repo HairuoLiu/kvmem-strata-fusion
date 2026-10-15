@@ -12,6 +12,11 @@
 本仓库的**研究主干**（`docs/master-research-report.md` 与四个 `plan-*/research-report.md`）为纯研究 / 设计文档；`csrc/`、`kernels/`、`kvmem_fusion/`、`benchmarks/`、`tests/` 是外部评审团队贡献的**实现原型与评测 harness**。
 
 > ⚠️ **关于"实测"数字的重要提醒**：外部团队报告的 `100% 针尖召回 / PPL 漂移 0.0000 / G-CAS-1 PASS / U-E-F-C 全 PASS` 等结论，经我们逐条复核，存在**① 未跑真实模型（合成数据）、② 规模仅 8K–32K（低于问题域两个数量级）、③ 硬件 Gate 用断言冒充实测**三类问题，**目前不可作为结论采信**。
+> **⚠️ 2026-10-15 更新（外部团队已回应，本条需分条重新认定，勿再整段引用）**：
+> - ① **部分整改**：对方已新增按我方实测 Qwen3-0.6B 统计量（`norm_dispersion` mean 0.7388）标定的非均匀 haystack 基准，`AntiCollapseSplitter` 在 needle 上 100% 触发、背景 0.8–3.4%，消融对照公平（θ=0.868 vs 999.0）。**但仍是合成标定数据，未加载任何权重**；且 needle/query 为随机高斯向量、与 haystack 流形无关，100% recall 应读作上界。
+> - ② **部分整改**：规模已扩展到 128K，但 **@10M 仍无实测**（2,441× 外推）。
+> - ③ **仍成立**：`linear_36_layers_total_us` 仍是单 token 哑张量 × 36，`bounded_attended_tokens` 由 `len(ret_bids)` 算术得出。
+> - **新增 P0（本轮发现）**：对方新实现的物理压实 `_evict_and_compact` 在 **prefill 阶段即触发**且无真实 query（拿最后一个 token 的 Key 冒充），实测与全注意力输出 cos=0.1336、top-10 重叠 0/10；关闭压实时同一条路径与原生 HF **逐位相同**。详见 [`docs/og_compare_76acb4a.md`](docs/og_compare_76acb4a.md)。
 > **第一轮质疑（含证据行号）：[`docs/external_review_critique.md`](docs/external_review_critique.md)**
 >
 > ✅ 外部团队已在 `273ae4b` 中**修好了报告诚信问题**（状态改为合成自洽验证、硬件 Gate 标 UNMEASURED、采纳子系统降级）。
