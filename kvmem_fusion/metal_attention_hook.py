@@ -119,6 +119,11 @@ class MetalKVCacheInterceptor(DynamicCache):
         self.last_sparsity_ratio: float = 1.0
         self.last_retrieval_recall: Optional[float] = None
 
+        # Qwen3.8-Flash-Next Bounded Execution View Configuration (R4 / QSA 2048-budget alignment)
+        self.indexer_budget: int = 2048
+        self.local_window_tokens: int = 256
+        self.current_decode_ranges: List[Tuple[int, int]] = []
+
     def set_token_ids(self, token_ids: List[int]) -> None:
         """Sets the sequence of token IDs for deterministic causal prefix hashing."""
         self.token_ids = list(token_ids)
@@ -173,27 +178,67 @@ class MetalKVCacheInterceptor(DynamicCache):
                 if len(unspilled_ids) >= 16:
                     self.spill_manager.spill_blocks(unspilled_ids[:16])
 
-        # 4. Active IFR Retrieval on Decode steps (single-token generation)
-        if key_states.shape[-2] == 1 and len(self.ifr_retriever.blocks) > 0 and layer_idx == 0:
-            q_vec = key_states[0, :, -1, :].mean(dim=0).detach().to(torch.float32).cpu().numpy()
-            top_k = min(32, len(self.ifr_retriever.blocks))
-            ret = self.ifr_retriever.retrieve(query=q_vec, top_k=top_k)
-            retrieved_ids = ret[0] if isinstance(ret, tuple) else ret
-            self.retrieval_count += 1
+        # 4. Active IFR Retrieval & Bounded Execution View (Aligned with Qwen3.8-Flash-Next indexer_budget)
+        if key_states.shape[-2] == 1:
+            if layer_idx == 0:
+                if total_seq_len > self.local_window_tokens and len(self.ifr_retriever.blocks) > 0:
+                    q_vec = key_states[0, :, -1, :].mean(dim=0).detach().to(torch.float32).cpu().numpy()
+                    max_retrieved = max((self.indexer_budget - self.local_window_tokens) // self.block_size, 1)
+                    top_k = min(max_retrieved, len(self.ifr_retriever.blocks))
+                    ret = self.ifr_retriever.retrieve(query=q_vec, top_k=top_k)
+                    retrieved_ids = ret[0] if isinstance(ret, tuple) else ret
+                    self.retrieval_count += 1
 
-            # If any retrieved block was spilled to NVMe, resolve it zero-copy from SuperTile mmap
-            if self.spill_manager is not None:
-                for b_id in retrieved_ids:
-                    if hasattr(self.spill_manager, "is_spilled") and self.spill_manager.is_spilled(b_id):
-                        self.spill_manager.retrieve_block(b_id)
+                    # Resolve any spilled block zero-copy from SuperTile mmap
+                    if self.spill_manager is not None:
+                        for b_id in retrieved_ids:
+                            if hasattr(self.spill_manager, "is_spilled") and self.spill_manager.is_spilled(b_id):
+                                self.spill_manager.retrieve_block(b_id)
 
-            # Compute actual attended working set (local recent window + retrieved sparse needle blocks)
-            local_window_tokens = min(total_seq_len, 512)
-            sparse_tokens = min(total_seq_len, local_window_tokens + len(retrieved_ids) * self.block_size)
-            self.attended_tokens_last = sparse_tokens
-            self.total_tokens_last = total_seq_len
-            self.last_sparsity_ratio = round(sparse_tokens / max(total_seq_len, 1), 4)
-            self.last_retrieval_recall = round(min(0.9382 + 0.01 * (len(retrieved_ids) / 32.0), 0.999), 4)
+                    # Gather discrete ranges: historical retrieved needle blocks + local sliding window
+                    local_start = max(0, total_seq_len - self.local_window_tokens)
+                    ranges = []
+                    for b_id in retrieved_ids:
+                        if b_id in self.atom_store.blocks:
+                            blk = self.atom_store.blocks[b_id]
+                            s_pos = blk.orig_pos_start
+                            e_pos = min(s_pos + self.block_size, total_seq_len)
+                            if e_pos <= local_start and s_pos < e_pos:
+                                ranges.append((s_pos, e_pos))
+
+                    # Merge overlapping/contiguous ranges
+                    merged_ranges = []
+                    for s, e in sorted(ranges, key=lambda x: x[0]):
+                        if not merged_ranges:
+                            merged_ranges.append((s, e))
+                        else:
+                            prev_s, prev_e = merged_ranges[-1]
+                            if s <= prev_e:
+                                merged_ranges[-1] = (prev_s, max(prev_e, e))
+                            else:
+                                merged_ranges.append((s, e))
+
+                    merged_ranges.append((local_start, total_seq_len))
+                    self.current_decode_ranges = merged_ranges
+
+                    compact_tokens = sum(e - s for s, e in merged_ranges)
+                    self.attended_tokens_last = compact_tokens
+                    self.total_tokens_last = total_seq_len
+                    self.last_sparsity_ratio = round(compact_tokens / max(total_seq_len, 1), 4)
+                    self.last_retrieval_recall = None
+                else:
+                    self.current_decode_ranges = [(0, total_seq_len)]
+                    self.attended_tokens_last = total_seq_len
+                    self.total_tokens_last = total_seq_len
+                    self.last_sparsity_ratio = 1.0
+                    self.last_retrieval_recall = None
+
+            # Return bounded execution view across all layers
+            if self.current_decode_ranges and self.current_decode_ranges != [(0, total_seq_len)]:
+                slices_k = [keys[:, :, s:e, :] for s, e in self.current_decode_ranges if s < e]
+                slices_v = [values[:, :, s:e, :] for s, e in self.current_decode_ranges if s < e]
+                if slices_k:
+                    return torch.cat(slices_k, dim=-2), torch.cat(slices_v, dim=-2)
 
         return keys, values
 

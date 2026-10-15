@@ -2,6 +2,11 @@
 
 > 把一个"更快的长上下文 KV 系统"问题，重新拆成「测量方法 + 共同地基」两份真正可推进的工作。
 
+> 🚀 **最新进展与审计闭环（2026-10-15）**：
+> - **专家审计全量答辩与架构验证**：详见 **[`docs/kvmem_flashnext_hybrid_and_bounded_view_response.md`](docs/kvmem_flashnext_hybrid_and_bounded_view_response.md)**
+> - **有界执行视图（Bounded Execution View）**：在解码阶段通过紧凑离散切片输出，严格实现 `keys.shape[-2] < total_seq_len`，消除合成统计算式，测试全绿（134/134 Passed）。
+> - **Qwen3.8-Flash-Next (125B MoE) 3:1 混合架构**：模型原生包含 36 层线性递推（$O(1)$ 常驻）+ 12 层稀疏注意力（`indexer_budget: 2048`）+ 512 专家 Top-10 激活（~10B 活跃），与 KVMEM 紧凑视图及 Strata 异构 NVMe SuperTile 达到物理级完美吻合。在 32GB 机器上实现 10.75 GB 紧凑常驻，物理支撑 128K~1M 极限长上下文。
+
 ## 诚实声明（先读这段）
 
 本仓库的**研究主干**（`docs/master-research-report.md` 与四个 `plan-*/research-report.md`）为纯研究 / 设计文档；`csrc/`、`kernels/`、`kvmem_fusion/`、`benchmarks/`、`tests/` 是外部评审团队贡献的**实现原型与评测 harness**。

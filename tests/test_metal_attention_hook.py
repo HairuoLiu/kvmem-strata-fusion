@@ -343,3 +343,54 @@ def test_end_to_end_local_model_with_interceptor():
     assert outputs.logits.shape[1] == input_ids.shape[1]
     assert isinstance(outputs.past_key_values, MetalKVCacheInterceptor)
     assert outputs.past_key_values.intercept_calls == len(model.model.layers)
+
+
+def test_bounded_execution_view_sparsity_and_reconciliation(device):
+    """
+    Rigorously verifies Bounded Execution View (OG Audit §1.1/§1.2 closure):
+    1. Keys returned for attention satisfy keys.shape[-2] < total_seq_len on decode.
+    2. attended_tokens_last exactly matches keys.shape[-2].
+    3. last_sparsity_ratio is bit-exact with returned keys.shape[-2] / total_seq_len.
+    4. Multi-layer consistency across layer 0 and layer 1.
+    5. No synthetic recall constants in telemetry.
+    """
+    interceptor = MetalKVCacheInterceptor(
+        block_size=32,
+        head_dim=64,
+        dtype=torch.float16,
+        device=device,
+    )
+    interceptor.local_window_tokens = 256
+    interceptor.indexer_budget = 512
+
+    # Ingest 1024 tokens during prefill
+    total_tokens = 1024
+    interceptor.set_token_ids(list(range(total_tokens)))
+    k_prefill = torch.randn(1, 4, total_tokens, 64, device=device, dtype=torch.float16)
+    v_prefill = torch.randn(1, 4, total_tokens, 64, device=device, dtype=torch.float16)
+
+    # Layer 0 & Layer 1 prefill
+    out_k0, out_v0 = interceptor.update(k_prefill, v_prefill, layer_idx=0)
+    out_k1, out_v1 = interceptor.update(k_prefill, v_prefill, layer_idx=1)
+    assert out_k0.shape[-2] == total_tokens
+    assert interceptor.active_casa_blocks == total_tokens // 32
+
+    # Autoregressive single-token decode step (token 1025)
+    interceptor.append_token_ids([1025])
+    k_decode = torch.randn(1, 4, 1, 64, device=device, dtype=torch.float16)
+    v_decode = torch.randn(1, 4, 1, 64, device=device, dtype=torch.float16)
+
+    out_k_dec0, out_v_dec0 = interceptor.update(k_decode, v_decode, layer_idx=0)
+    out_k_dec1, out_v_dec1 = interceptor.update(k_decode, v_decode, layer_idx=1)
+
+    # Core assertion: Bounded Execution View satisfies keys.shape[-2] < total_seq_len
+    total_cached = 1025
+    assert out_k_dec0.shape[-2] < total_cached, f"Expected bounded view < {total_cached}, got {out_k_dec0.shape[-2]}"
+    assert out_k_dec1.shape[-2] == out_k_dec0.shape[-2], "Multi-layer bounded view shape must match across layers"
+    assert out_k_dec0.shape[-2] <= interceptor.indexer_budget
+
+    # Reconcilability assertion: reported metrics match returned tensor bit-exactly
+    assert interceptor.attended_tokens_last == out_k_dec0.shape[-2]
+    expected_sparsity = round(out_k_dec0.shape[-2] / total_cached, 4)
+    assert interceptor.last_sparsity_ratio == expected_sparsity
+    assert interceptor.last_retrieval_recall is None  # Synthetic arithmetic deleted
