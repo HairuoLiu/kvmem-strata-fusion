@@ -43,6 +43,7 @@ from kvmem_fusion.ifr import (
 )
 from kvmem_fusion.ladder import get_tier_biases
 from kvmem_fusion.ubba import solve_ubba_greedy, create_ladder_block_candidate
+from kvmem_fusion.spill_manager import SuperTileSpillManager, DiskSpillManager
 
 
 class MetalKVCacheInterceptor(DynamicCache):
@@ -57,6 +58,18 @@ class MetalKVCacheInterceptor(DynamicCache):
     - LSE (Log-Sum-Exp) unnormalized attention mass accounting.
     - Zero-overhead MPS Unified Memory retention in float16/bfloat16.
     """
+
+    _active_interceptor: Optional["MetalKVCacheInterceptor"] = None
+
+    @classmethod
+    def get_active_interceptor(cls) -> Optional["MetalKVCacheInterceptor"]:
+        """Returns the globally active interceptor during forward attention dispatch."""
+        return cls._active_interceptor
+
+    @classmethod
+    def set_active_interceptor(cls, interceptor: Optional["MetalKVCacheInterceptor"]) -> None:
+        """Sets the globally active interceptor during forward attention dispatch."""
+        cls._active_interceptor = interceptor
 
     def __init__(
         self,
@@ -73,7 +86,10 @@ class MetalKVCacheInterceptor(DynamicCache):
         enable_casa_dedup: bool = True,
         enable_ifr_indexing: bool = True,
         spill_manager: Optional[Any] = None,
-        max_cache_tokens: int = 4096,
+        max_cache_tokens: int = 2048,
+        indexer_budget: int = 2048,
+        local_window_tokens: int = 256,
+        sink_tokens: int = 256,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
@@ -97,8 +113,24 @@ class MetalKVCacheInterceptor(DynamicCache):
             dim=head_dim, dispersion_threshold=dispersion_threshold, use_normalized=True
         )
         self.lse_tracker = lse_tracker or LSECacheTracker(head_dim=head_dim)
-        self.spill_manager = spill_manager
         self.max_cache_tokens = max_cache_tokens
+        self.indexer_budget = kwargs.get("indexer_budget", indexer_budget)
+        self.local_window_tokens = kwargs.get("local_window_tokens", local_window_tokens)
+        self.sink_tokens = kwargs.get("sink_tokens", sink_tokens)
+
+        # Spill manager initialization
+        if spill_manager is not None:
+            self.spill_manager = spill_manager
+            if getattr(self.spill_manager, "atom_store", None) is None:
+                self.spill_manager.attach_store(self.atom_store)
+            if getattr(self.spill_manager, "ifr_retriever", None) is None:
+                self.spill_manager.attach_ifr(self.ifr_retriever)
+        else:
+            self.spill_manager = DiskSpillManager(
+                atom_store=self.atom_store,
+                ifr_retriever=self.ifr_retriever,
+                max_active_tokens=self.indexer_budget,
+            )
 
         # Interception and Telemetry State
         self.token_ids: List[int] = []
@@ -111,6 +143,8 @@ class MetalKVCacheInterceptor(DynamicCache):
         self.intercept_calls: int = 0
         self.total_tokens_cached: int = 0
         self.lse_records: List[Dict[str, float]] = []
+        self.cumulative_lengths: Dict[int, int] = {}
+        self.offloaded_block_ids: Set[str] = set()
 
         # Dynamic Retrieval and Working-Set Metrics
         self.retrieval_count: int = 0
@@ -118,11 +152,43 @@ class MetalKVCacheInterceptor(DynamicCache):
         self.total_tokens_last: int = 0
         self.last_sparsity_ratio: float = 1.0
         self.last_retrieval_recall: Optional[float] = None
-
-        # Qwen3.8-Flash-Next Bounded Execution View Configuration (R4 / QSA 2048-budget alignment)
-        self.indexer_budget: int = 2048
-        self.local_window_tokens: int = 256
+        self.last_query_vector: Optional[np.ndarray] = None
+        self.last_retrieved_block_ids: List[str] = []
         self.current_decode_ranges: List[Tuple[int, int]] = []
+        self._last_retrieval_seq_len: int = -1
+        self._current_retrieved_ids: List[str] = []
+
+    @property
+    def key_cache(self) -> List[torch.Tensor]:
+        """In-memory physical key cache buffers across layers."""
+        return [layer.keys for layer in self.layers if hasattr(layer, "keys") and layer.keys is not None]
+
+    @property
+    def value_cache(self) -> List[torch.Tensor]:
+        """In-memory physical value cache buffers across layers."""
+        return [layer.values for layer in self.layers if hasattr(layer, "values") and layer.values is not None]
+
+    def get_seq_length(self, layer_idx: int = 0) -> int:
+        """Returns the logical sequence length of the cache for the given layer."""
+        if hasattr(self, "cumulative_lengths") and layer_idx in self.cumulative_lengths:
+            return self.cumulative_lengths[layer_idx]
+        if hasattr(self, "total_tokens_cached") and self.total_tokens_cached > 0:
+            return self.total_tokens_cached
+        if layer_idx < len(self.layers) and hasattr(self.layers[layer_idx], "get_seq_length"):
+            return self.layers[layer_idx].get_seq_length()
+        return 0
+
+    def get_max_cache_shape(self) -> int:
+        """Returns maximum physical buffer capacity (indexer_budget + sink_tokens)."""
+        return self.indexer_budget + self.sink_tokens
+
+    def retrieve_or_fault_block(self, block_id: str) -> KVBlock:
+        """Zero-copy on-demand faulting/loading of an offloaded block from disk SuperTiles."""
+        if self.spill_manager is not None and hasattr(self.spill_manager, "is_spilled") and self.spill_manager.is_spilled(block_id):
+            return self.spill_manager.retrieve_block(block_id)
+        if block_id in self.atom_store.blocks:
+            return self.atom_store.blocks[block_id]
+        raise KeyError(f"Block {block_id} not found in interceptor store or disk SuperTiles.")
 
     def set_token_ids(self, token_ids: List[int]) -> None:
         """Sets the sequence of token IDs for deterministic causal prefix hashing."""
@@ -142,103 +208,188 @@ class MetalKVCacheInterceptor(DynamicCache):
         """
         Intercepts the layer forward pass KV projection update.
         Maintains native float16/bfloat16 precision on Apple Silicon Metal MPS,
-        updates DynamicCache backing buffers, and registers complete 32-token
-        blocks into CASA and IFR indexes.
-
-        Parameters:
-            key_states: [batch_size, num_kv_heads, seq_len, head_dim]
-            value_states: [batch_size, num_kv_heads, seq_len, head_dim]
-            layer_idx: Layer index in transformer backbone
-            cache_kwargs: Optional kwargs from model forward (e.g. sin, cos, cache_position)
-
-        Returns:
-            Tuple of updated (keys, values) tensors.
+        updates DynamicCache backing buffers, registers complete 32-token
+        blocks into CASA and IFR indexes, actively evicts cold blocks to NVMe SuperTiles,
+        and physically compacts the in-memory cache.
         """
         self.intercept_calls += 1
+        MetalKVCacheInterceptor.set_active_interceptor(self)
 
         # 1. Update native HuggingFace DynamicCache layer storage
         keys, values = super().update(key_states, value_states, layer_idx, cache_kwargs)
 
-        # 2. Extract sequence geometry
-        # keys shape: [batch_size, num_kv_heads, total_seq_len, head_dim]
-        total_seq_len = keys.shape[-2]
+        # 2. Extract sequence geometry & update cumulative logical length
+        q_len = key_states.shape[-2]
+        prev_logical_len = self.cumulative_lengths.get(layer_idx, 0)
+        curr_logical_len = prev_logical_len + q_len
+        self.cumulative_lengths[layer_idx] = curr_logical_len
         if layer_idx == 0:
-            self.total_tokens_cached = total_seq_len
+            self.total_tokens_cached = curr_logical_len
 
         # 3. Intercept & Index 32-token logical blocks into CASA & IFR on canonical layer 0
-        if (self.enable_casa_dedup or self.enable_ifr_indexing) and total_seq_len >= self.block_size and layer_idx == 0:
-            self._index_new_blocks(keys, values, layer_idx, total_seq_len)
+        if (self.enable_casa_dedup or self.enable_ifr_indexing) and curr_logical_len >= self.block_size and layer_idx == 0:
+            self._index_new_blocks(
+                keys, values, layer_idx, curr_logical_len,
+                key_states=key_states, value_states=value_states, prev_logical_len=prev_logical_len
+            )
 
-            # Active NVMe spilling when cache watermark is crossed
-            if self.spill_manager is not None and total_seq_len > self.max_cache_tokens:
-                unspilled_ids = [
-                    bid for bid in self.atom_store.blocks.keys()
-                    if hasattr(self.spill_manager, "is_spilled") and not self.spill_manager.is_spilled(bid)
-                ]
-                if len(unspilled_ids) >= 16:
-                    self.spill_manager.spill_blocks(unspilled_ids[:16])
+        # 4. If multi-layer, record layer representations
+        if layer_idx > 0 and curr_logical_len >= self.block_size and hasattr(self, "_record_layer_blocks"):
+            self._record_layer_blocks(keys, values, layer_idx, curr_logical_len)
 
-        # 4. Active IFR Retrieval & Bounded Execution View (Aligned with Qwen3.8-Flash-Next indexer_budget)
-        if key_states.shape[-2] == 1:
-            if layer_idx == 0:
-                if total_seq_len > self.local_window_tokens and len(self.ifr_retriever.blocks) > 0:
-                    q_vec = key_states[0, :, -1, :].mean(dim=0).detach().to(torch.float32).cpu().numpy()
-                    max_retrieved = max((self.indexer_budget - self.local_window_tokens) // self.block_size, 1)
-                    top_k = min(max_retrieved, len(self.ifr_retriever.blocks))
-                    ret = self.ifr_retriever.retrieve(query=q_vec, top_k=top_k)
-                    retrieved_ids = ret[0] if isinstance(ret, tuple) else ret
-                    self.retrieval_count += 1
+        # 5. Active physical eviction and compaction when cache threshold is exceeded
+        eviction_threshold = self.max_cache_tokens
+        if curr_logical_len > eviction_threshold and hasattr(self, "_evict_and_compact"):
+            self._evict_and_compact(layer_idx, key_states, value_states, curr_logical_len)
+            if hasattr(self.layers[layer_idx], "keys") and self.layers[layer_idx].keys is not None:
+                return self.layers[layer_idx].keys, self.layers[layer_idx].values
 
-                    # Resolve any spilled block zero-copy from SuperTile mmap
-                    if self.spill_manager is not None:
-                        for b_id in retrieved_ids:
-                            if hasattr(self.spill_manager, "is_spilled") and self.spill_manager.is_spilled(b_id):
-                                self.spill_manager.retrieve_block(b_id)
+        # If cache_kwargs explicitly passes genuine query tensor, allow retrieve_bounded_view dispatch
+        if cache_kwargs is not None and "query" in cache_kwargs:
+            compact_k = self.layers[layer_idx].keys if hasattr(self.layers[layer_idx], "keys") and self.layers[layer_idx].keys is not None else keys
+            compact_v = self.layers[layer_idx].values if hasattr(self.layers[layer_idx], "values") and self.layers[layer_idx].values is not None else values
+            return self.retrieve_bounded_view(
+                query=cache_kwargs["query"],
+                keys=compact_k,
+                values=compact_v,
+                layer_idx=layer_idx,
+            )
 
-                    # Gather discrete ranges: historical retrieved needle blocks + local sliding window
-                    local_start = max(0, total_seq_len - self.local_window_tokens)
-                    ranges = []
+        return keys, values
+
+    def retrieve_bounded_view(
+        self,
+        query: Union[torch.Tensor, np.ndarray],
+        keys: torch.Tensor,
+        values: torch.Tensor,
+        layer_idx: int = 0,
+        force_refresh: bool = False,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Executes true Query-driven bounded view retrieval on IFR indexer and returns
+        the compact slice of keys and values for SDPA attention execution.
+
+        Parameters:
+            query: Genuine Query tensor [B, H, S, D] or slice [B, H, 1, D] or numpy vector
+            keys: Full cached key tensor [B, KV_H, total_seq_len, D]
+            values: Full cached value tensor [B, KV_H, total_seq_len, D]
+            layer_idx: Attention layer index (layer 0 / first sparse layer sets ranges)
+            force_refresh: Whether to force re-executing retrieval even if ranges exist
+
+        Returns:
+            Tuple of bounded (keys, values) strictly satisfying:
+            keys.shape[-2] <= self.indexer_budget + self.local_window_tokens
+        """
+        total_seq_len = keys.shape[-2]
+
+        # Extract 1D representative query vector from genuine Query tensor Q
+        if isinstance(query, torch.Tensor):
+            if query.dim() >= 3:
+                # query shape: [batch, heads, q_len, dim] -> take last decode token, mean-pool across heads
+                q_vec = query[0, :, -1, :].mean(dim=0).detach().to(torch.float32).cpu().numpy()
+            elif query.dim() == 2:
+                q_vec = query[-1, :].detach().to(torch.float32).cpu().numpy()
+            elif query.dim() == 1:
+                q_vec = query.detach().to(torch.float32).cpu().numpy()
+            else:
+                q_vec = query.view(-1)[: self.head_dim].detach().to(torch.float32).cpu().numpy()
+        elif isinstance(query, np.ndarray):
+            if query.ndim > 1:
+                q_vec = query.reshape(-1, query.shape[-1])[-1].astype(np.float32)
+            else:
+                q_vec = query.astype(np.float32)
+        else:
+            raise TypeError(f"Unsupported query type: {type(query)}")
+
+        if q_vec.shape[-1] != self.head_dim and self.head_dim > 0:
+            if q_vec.shape[-1] > self.head_dim:
+                q_vec = q_vec[: self.head_dim]
+            else:
+                padded = np.zeros(self.head_dim, dtype=np.float32)
+                padded[: q_vec.shape[-1]] = q_vec
+                q_vec = padded
+
+        self.last_query_vector = q_vec
+
+        # Determine if retrieval should be refreshed
+        # Layer 0 or first sparse layer refreshes; subsequent layers in same decode step reuse ranges for consistency
+        needs_retrieval = (
+            force_refresh
+            or (layer_idx == 0)
+            or (not self.current_decode_ranges)
+            or (self._last_retrieval_seq_len != total_seq_len)
+        )
+
+        if needs_retrieval:
+            if total_seq_len > self.local_window_tokens and len(self.ifr_retriever.blocks) > 0:
+                max_retrieved = max((self.indexer_budget - self.local_window_tokens) // self.block_size, 1)
+                top_k = min(max_retrieved, len(self.ifr_retriever.blocks))
+                ret = self.ifr_retriever.retrieve(query=q_vec, top_k=top_k)
+                retrieved_ids = ret[0] if isinstance(ret, tuple) else ret
+                self.retrieval_count += 1
+                self.last_retrieved_block_ids = list(retrieved_ids)
+
+                # Resolve any spilled block zero-copy from SuperTile mmap
+                if self.spill_manager is not None:
                     for b_id in retrieved_ids:
-                        if b_id in self.atom_store.blocks:
-                            blk = self.atom_store.blocks[b_id]
-                            s_pos = blk.orig_pos_start
-                            e_pos = min(s_pos + self.block_size, total_seq_len)
-                            if e_pos <= local_start and s_pos < e_pos:
-                                ranges.append((s_pos, e_pos))
+                        if hasattr(self.spill_manager, "is_spilled") and self.spill_manager.is_spilled(b_id):
+                            self.spill_manager.retrieve_block(b_id)
 
-                    # Merge overlapping/contiguous ranges
-                    merged_ranges = []
-                    for s, e in sorted(ranges, key=lambda x: x[0]):
-                        if not merged_ranges:
-                            merged_ranges.append((s, e))
+                # Gather discrete ranges: historical retrieved needle blocks + local sliding window
+                local_start = max(0, total_seq_len - self.local_window_tokens)
+                ranges = []
+                for b_id in retrieved_ids:
+                    if b_id in self.atom_store.blocks:
+                        blk = self.atom_store.blocks[b_id]
+                        s_pos = blk.orig_pos_start
+                        e_pos = min(s_pos + self.block_size, total_seq_len)
+                        if e_pos <= local_start and s_pos < e_pos:
+                            ranges.append((s_pos, e_pos))
+
+                # Merge overlapping/contiguous ranges
+                merged_ranges = []
+                for s, e in sorted(ranges, key=lambda x: x[0]):
+                    if not merged_ranges:
+                        merged_ranges.append((s, e))
+                    else:
+                        prev_s, prev_e = merged_ranges[-1]
+                        if s <= prev_e:
+                            merged_ranges[-1] = (prev_s, max(prev_e, e))
                         else:
-                            prev_s, prev_e = merged_ranges[-1]
-                            if s <= prev_e:
-                                merged_ranges[-1] = (prev_s, max(prev_e, e))
-                            else:
-                                merged_ranges.append((s, e))
+                            merged_ranges.append((s, e))
 
-                    merged_ranges.append((local_start, total_seq_len))
-                    self.current_decode_ranges = merged_ranges
+                merged_ranges.append((local_start, total_seq_len))
+                self.current_decode_ranges = merged_ranges
+                self._last_retrieval_seq_len = total_seq_len
 
-                    compact_tokens = sum(e - s for s, e in merged_ranges)
-                    self.attended_tokens_last = compact_tokens
-                    self.total_tokens_last = total_seq_len
-                    self.last_sparsity_ratio = round(compact_tokens / max(total_seq_len, 1), 4)
-                    self.last_retrieval_recall = None
-                else:
-                    self.current_decode_ranges = [(0, total_seq_len)]
-                    self.attended_tokens_last = total_seq_len
-                    self.total_tokens_last = total_seq_len
-                    self.last_sparsity_ratio = 1.0
-                    self.last_retrieval_recall = None
+                compact_tokens = sum(e - s for s, e in merged_ranges)
+                self.attended_tokens_last = compact_tokens
+                self.total_tokens_last = total_seq_len
+                self.last_sparsity_ratio = round(compact_tokens / max(total_seq_len, 1), 4)
+                self.last_retrieval_recall = None
+            else:
+                self.current_decode_ranges = [(0, total_seq_len)]
+                self.attended_tokens_last = total_seq_len
+                self.total_tokens_last = total_seq_len
+                self.last_sparsity_ratio = 1.0
+                self.last_retrieval_recall = None
+                self._last_retrieval_seq_len = total_seq_len
+                self.last_retrieved_block_ids = []
 
-            # Return bounded execution view across all layers
-            if self.current_decode_ranges and self.current_decode_ranges != [(0, total_seq_len)]:
-                slices_k = [keys[:, :, s:e, :] for s, e in self.current_decode_ranges if s < e]
-                slices_v = [values[:, :, s:e, :] for s, e in self.current_decode_ranges if s < e]
-                if slices_k:
-                    return torch.cat(slices_k, dim=-2), torch.cat(slices_v, dim=-2)
+        # Return bounded execution view across all layers
+        if self.current_decode_ranges and self.current_decode_ranges != [(0, total_seq_len)]:
+            slices_k = [keys[:, :, s:e, :] for s, e in self.current_decode_ranges if s < e]
+            slices_v = [values[:, :, s:e, :] for s, e in self.current_decode_ranges if s < e]
+            if slices_k:
+                b_k = torch.cat(slices_k, dim=-2)
+                b_v = torch.cat(slices_v, dim=-2)
+                # Strictly enforce bound: keys.shape[-2] <= interceptor.indexer_budget + interceptor.local_window_tokens
+                max_bound = self.indexer_budget + self.local_window_tokens
+                if b_k.shape[-2] > max_bound:
+                    b_k = b_k[:, :, -max_bound:, :]
+                    b_v = b_v[:, :, -max_bound:, :]
+                self.attended_tokens_last = b_k.shape[-2]
+                return b_k, b_v
 
         return keys, values
 
@@ -248,6 +399,9 @@ class MetalKVCacheInterceptor(DynamicCache):
         values: torch.Tensor,
         layer_idx: int,
         total_seq_len: int,
+        key_states: Optional[torch.Tensor] = None,
+        value_states: Optional[torch.Tensor] = None,
+        prev_logical_len: int = 0,
     ) -> None:
         """Indexes newly formed 32-token blocks into CASA and IFR stores."""
         num_blocks = total_seq_len // self.block_size
@@ -270,8 +424,28 @@ class MetalKVCacheInterceptor(DynamicCache):
                 block_tokens = list(range(start_pos, end_pos))
 
             # Extract key and value representations
-            k_block = keys[0, :, start_pos:end_pos, :]  # [heads, block_size, dim]
-            v_block = values[0, :, start_pos:end_pos, :]
+            k_block = None
+            v_block = None
+            if key_states is not None and value_states is not None:
+                offset_start = start_pos - prev_logical_len
+                offset_end = end_pos - prev_logical_len
+                if 0 <= offset_start and offset_end <= key_states.shape[-2]:
+                    k_block = key_states[0, :, offset_start:offset_end, :]
+                    v_block = value_states[0, :, offset_start:offset_end, :]
+
+            if k_block is None:
+                if end_pos <= keys.shape[-2]:
+                    k_block = keys[0, :, start_pos:end_pos, :]
+                    v_block = values[0, :, start_pos:end_pos, :]
+                else:
+                    tail_start = max(0, keys.shape[-2] - (total_seq_len - start_pos))
+                    tail_end = tail_start + self.block_size
+                    if tail_end <= keys.shape[-2]:
+                        k_block = keys[0, :, tail_start:tail_end, :]
+                        v_block = values[0, :, tail_start:tail_end, :]
+
+            if k_block is None or k_block.shape[-2] != self.block_size:
+                continue
 
             # Mean-head representation for coarse indexing
             k_rep = k_block.mean(dim=0).detach().to(torch.float32).cpu().numpy()
@@ -284,6 +458,9 @@ class MetalKVCacheInterceptor(DynamicCache):
             else:
                 k_rep_aligned = k_rep
                 v_rep_aligned = v_rep
+
+            k_raw = k_block.detach().cpu().to(torch.float32).numpy()
+            v_raw = v_block.detach().cpu().to(torch.float32).numpy()
 
             # 1. CASA Prefix Hash Registration
             curr_hash = compute_prefix_hash(
@@ -302,6 +479,8 @@ class MetalKVCacheInterceptor(DynamicCache):
                     orig_pos_start=start_pos,
                     parent_hash=self.parent_hash,
                     tier="FP16" if self.dtype == torch.float16 else "FP32",
+                    raw_k=k_raw,
+                    raw_v=v_raw,
                 )
                 block_id = registered_id
                 self.active_casa_blocks = len(self.atom_store.blocks)
@@ -328,6 +507,133 @@ class MetalKVCacheInterceptor(DynamicCache):
                 self.active_ifr_blocks = len(self.ifr_retriever.blocks)
 
             indexed_blocks.append(block_id)
+            if self.spill_manager is not None and block_id in self.atom_store.blocks:
+                self.spill_manager.on_block_added(self.atom_store.blocks[block_id])
+
+    def _record_layer_blocks(
+        self,
+        keys: torch.Tensor,
+        values: torch.Tensor,
+        layer_idx: int,
+        total_seq_len: int,
+    ) -> None:
+        """Records layer-specific multi-head representations into atom store blocks."""
+        num_blocks = total_seq_len // self.block_size
+        b_ids = self.layer_block_ids.get(0, [])
+        for b_idx in range(min(num_blocks, len(b_ids))):
+            start_pos = b_idx * self.block_size
+            end_pos = start_pos + self.block_size
+            if end_pos <= keys.shape[-2]:
+                bid = b_ids[b_idx]
+                blk = self.atom_store.blocks.get(bid)
+                if blk is not None:
+                    k_block = keys[0, :, start_pos:end_pos, :]
+                    v_block = values[0, :, start_pos:end_pos, :]
+                    blk.layer_raw_k[layer_idx] = k_block.detach().cpu().to(torch.float32).numpy()
+                    blk.layer_raw_v[layer_idx] = v_block.detach().cpu().to(torch.float32).numpy()
+
+    def _evict_and_compact(
+        self,
+        layer_idx: int,
+        key_states: torch.Tensor,
+        value_states: torch.Tensor,
+        total_logical_tokens: int,
+    ) -> None:
+        """
+        Actively evicts cold/un-retrieved blocks from the in-memory key_cache and value_cache
+        into NVMe SuperTiles (DiskSpillManager), and physically compacts the layer buffers
+        to retain only:
+        1. Sink / prefix tokens (first sink_tokens)
+        2. Active retrieved blocks (from IFR)
+        3. Recent local window tokens (last local_window_tokens)
+        """
+        layer = self.layers[layer_idx]
+        if layer.keys is None:
+            return
+
+        sink_len = min(self.sink_tokens, total_logical_tokens)
+        local_len = min(self.local_window_tokens, max(0, total_logical_tokens - sink_len))
+        local_start = total_logical_tokens - local_len
+
+        # 1. On canonical layer 0, determine active retrieved blocks vs cold blocks
+        if layer_idx == 0:
+            retrieved_ids: List[str] = []
+            if total_logical_tokens > self.local_window_tokens and len(self.ifr_retriever.blocks) > 0:
+                q_vec = key_states[0, :, -1, :].mean(dim=0).detach().to(torch.float32).cpu().numpy()
+                max_retrieved = max((self.indexer_budget - self.local_window_tokens) // self.block_size, 1)
+                top_k = min(max_retrieved, len(self.ifr_retriever.blocks))
+                ret = self.ifr_retriever.retrieve(query=q_vec, top_k=top_k)
+                retrieved_ids = ret[0] if isinstance(ret, tuple) else ret
+                self.retrieval_count += 1
+                self.last_retrieved_block_ids = list(retrieved_ids)
+
+            self._current_retrieved_ids = retrieved_ids
+
+            # Find all middle blocks strictly between sink and local window
+            all_middle_blocks = []
+            for b_id, blk in self.atom_store.blocks.items():
+                s_pos = blk.orig_pos_start
+                e_pos = s_pos + self.block_size
+                if s_pos >= sink_len and e_pos <= local_start:
+                    all_middle_blocks.append(b_id)
+
+            # Evict un-retrieved cold blocks to SuperTiles on disk
+            cold_blocks = [bid for bid in all_middle_blocks if bid not in retrieved_ids]
+            if self.spill_manager is not None and cold_blocks:
+                unspilled = [
+                    bid for bid in cold_blocks
+                    if hasattr(self.spill_manager, "is_spilled") and not self.spill_manager.is_spilled(bid)
+                ]
+                if unspilled:
+                    self.spill_manager.spill_blocks(unspilled)
+                    self.offloaded_block_ids.update(unspilled)
+
+        # 2. Compact physical memory in self.layers[layer_idx]
+        retrieved_ids = getattr(self, "_current_retrieved_ids", [])
+
+        # Retrieve any spilled blocks zero-copy
+        retrieved_k_slices = []
+        retrieved_v_slices = []
+        for b_id in retrieved_ids:
+            if b_id in self.atom_store.blocks:
+                blk = self.atom_store.blocks[b_id]
+                s_pos = blk.orig_pos_start
+                e_pos = s_pos + self.block_size
+                if s_pos >= sink_len and e_pos <= local_start:
+                    if self.spill_manager is not None and hasattr(self.spill_manager, "is_spilled") and self.spill_manager.is_spilled(b_id):
+                        self.spill_manager.retrieve_block(b_id)
+                    raw_k = blk.layer_raw_k.get(layer_idx, blk.raw_k) if hasattr(blk, "layer_raw_k") else blk.raw_k
+                    raw_v = blk.layer_raw_v.get(layer_idx, blk.raw_v) if hasattr(blk, "layer_raw_v") else blk.raw_v
+                    if raw_k is not None and raw_v is not None:
+                        k_t = torch.from_numpy(raw_k).to(device=layer.keys.device, dtype=layer.keys.dtype)
+                        v_t = torch.from_numpy(raw_v).to(device=layer.values.device, dtype=layer.values.dtype)
+                        if k_t.dim() == 3:
+                            k_t = k_t.unsqueeze(0)
+                        if v_t.dim() == 3:
+                            v_t = v_t.unsqueeze(0)
+                        retrieved_k_slices.append(k_t)
+                        retrieved_v_slices.append(v_t)
+
+        # Extract sink slice from start of layer buffer
+        sink_k = layer.keys[:, :, :sink_len, :]
+        sink_v = layer.values[:, :, :sink_len, :]
+
+        # Extract local window slice from tail of layer buffer
+        local_k = layer.keys[:, :, -local_len:, :]
+        local_v = layer.values[:, :, -local_len:, :]
+
+        # Physically compact buffer in memory
+        compact_k = torch.cat([sink_k] + retrieved_k_slices + [local_k], dim=-2)
+        compact_v = torch.cat([sink_v] + retrieved_v_slices + [local_v], dim=-2)
+
+        layer.keys = compact_k
+        layer.values = compact_v
+
+        if layer_idx == 0:
+            self.attended_tokens_last = compact_k.shape[-2]
+            self.total_tokens_last = total_logical_tokens
+            self.last_sparsity_ratio = round(self.attended_tokens_last / max(total_logical_tokens, 1), 4)
+            self.last_retrieval_recall = None
 
     def get_stats(self) -> Dict[str, Any]:
         """Returns comprehensive real-time telemetry from the interceptor."""
@@ -336,14 +642,20 @@ class MetalKVCacheInterceptor(DynamicCache):
         num_tokens = self.total_tokens_cached
         bytes_per_elem = 2 if self.dtype in (torch.float16, torch.bfloat16) else 4
 
-        estimated_heads = 8
+        physical_tokens = 0
         if total_layers > 0 and hasattr(self.layers[0], "keys") and self.layers[0].keys is not None:
+            physical_tokens = self.layers[0].keys.shape[-2]
             estimated_heads = self.layers[0].keys.shape[1]
-        kv_memory_mb = round((2 * total_layers * estimated_heads * num_tokens * head_dim * bytes_per_elem) / (1024 * 1024), 2)
+        else:
+            estimated_heads = 8
+
+        # True physical memory footprint in RAM / MPS reflects compacted buffers
+        kv_memory_mb = round((2 * total_layers * estimated_heads * physical_tokens * head_dim * bytes_per_elem) / (1024 * 1024), 2)
 
         return {
             "total_layers": total_layers,
             "total_tokens": num_tokens,
+            "physical_tokens": physical_tokens,
             "active_casa_blocks": self.active_casa_blocks,
             "active_ifr_blocks": self.active_ifr_blocks,
             "active_doublets_split": self.active_doublets_split,
@@ -353,6 +665,8 @@ class MetalKVCacheInterceptor(DynamicCache):
             "device": str(self.device),
             "kv_memory_mb": kv_memory_mb,
             "block_size": self.block_size,
+            "offloaded_blocks": len(self.offloaded_block_ids),
+            "spilled_tokens": self.spill_manager.total_spilled_tokens if self.spill_manager else 0,
         }
 
     def evict_or_compress(self, target_coverage: float = 0.95, policy: str = "ladder") -> Dict[str, Any]:
@@ -402,6 +716,15 @@ class MetalKVCacheInterceptor(DynamicCache):
         self.intercept_calls = 0
         self.total_tokens_cached = 0
         self.lse_records.clear()
+        self.cumulative_lengths.clear()
+        self.offloaded_block_ids.clear()
+        self.current_decode_ranges.clear()
+        self._last_retrieval_seq_len = -1
+        self.last_query_vector = None
+        self.last_retrieved_block_ids.clear()
+        self._current_retrieved_ids.clear()
+        if MetalKVCacheInterceptor._active_interceptor is self:
+            MetalKVCacheInterceptor._active_interceptor = None
 
 
 def metal_sdpa_prefill(
@@ -518,6 +841,38 @@ def metal_sdpa_attention_forward(
     q_len = query.shape[-2]
     kv_len = key.shape[-2]
 
+    # Resolve interceptor from kwargs, module hook state, or active class state
+    interceptor = kwargs.get("past_key_values") or kwargs.get("past_key_value") or kwargs.get("interceptor")
+    if interceptor is None and hasattr(module, "_current_interceptor"):
+        interceptor = getattr(module, "_current_interceptor", None)
+    if interceptor is None:
+        interceptor = MetalKVCacheInterceptor.get_active_interceptor()
+
+    # Bounded Sparse Attention during decode or sparse execution
+    if isinstance(interceptor, MetalKVCacheInterceptor):
+        if q_len == 1 or kv_len > q_len or kwargs.get("use_bounded_view", False):
+            layer_idx = kwargs.get("layer_idx", getattr(module, "layer_idx", 0))
+            if layer_idx is None:
+                layer_idx = 0
+            # Extract true query slice Q[:, :, -1:, :] for IFR retrieval
+            q_slice = query[:, :, -1:, :]
+            key, value = interceptor.retrieve_bounded_view(
+                query=q_slice,
+                keys=key,
+                values=value,
+                layer_idx=layer_idx,
+            )
+            kv_len = key.shape[-2]
+
+            # Adjust attention mask if length mismatch occurs due to bounded slicing
+            if attention_mask is not None and attention_mask.shape[-1] != kv_len:
+                if q_len == 1:
+                    attention_mask = None
+                elif hasattr(interceptor, "current_decode_ranges") and interceptor.current_decode_ranges:
+                    mask_slices = [attention_mask[..., s:e] for s, e in interceptor.current_decode_ranges if s < e]
+                    if mask_slices:
+                        attention_mask = torch.cat(mask_slices, dim=-1)
+
     # Determine causal masking requirements
     if is_causal is None:
         if q_len > 1 and q_len == kv_len and attention_mask is None:
@@ -573,12 +928,32 @@ def apply_metal_attention_hooks(
     if hasattr(model, "config"):
         setattr(model.config, "_attn_implementation", "sdpa")
 
+    def make_forward_wrapper(mod):
+        orig_forward = mod.forward
+
+        def wrapped_forward(*args, **kwargs):
+            # Capture past_key_value from arguments
+            pkv = kwargs.get("past_key_value") or kwargs.get("past_key_values")
+            if pkv is None and len(args) > 3:
+                pkv = args[3]
+            if isinstance(pkv, MetalKVCacheInterceptor):
+                mod._current_interceptor = pkv
+                MetalKVCacheInterceptor.set_active_interceptor(pkv)
+            try:
+                return orig_forward(*args, **kwargs)
+            finally:
+                if hasattr(mod, "_current_interceptor"):
+                    mod._current_interceptor = None
+
+        return wrapped_forward
+
     hook_count = 0
     for name, module in model.named_modules():
         mod_type = type(module).__name__
         if "Attention" in mod_type and hasattr(module, "forward"):
             if not hasattr(module, "_original_attention_forward"):
                 module._original_attention_forward = module.forward
+                module.forward = make_forward_wrapper(module)
             hook_count += 1
 
     try:
@@ -616,6 +991,8 @@ def remove_metal_attention_hooks(model: nn.Module) -> nn.Module:
         if hasattr(module, "_original_attention_forward"):
             module.forward = module._original_attention_forward
             del module._original_attention_forward
+            if hasattr(module, "_current_interceptor"):
+                del module._current_interceptor
             restored += 1
     print(f"[Metal Attention Hook] Restored {restored} original attention forward methods.")
     return model

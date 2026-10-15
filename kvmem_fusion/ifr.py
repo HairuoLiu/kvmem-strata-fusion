@@ -21,6 +21,16 @@ def compute_deroped_mean(keys: np.ndarray) -> Tuple[np.ndarray, float, float]:
     compute mean centroid, max token deviation max_i ||k_i - mean_k||,
     and average dispersion mean_i ||k_i - mean_k||.
     """
+    try:
+        from kvmem_fusion.c_engine_bindings import is_c_engine_available, compute_deroped_mean_c
+        if is_c_engine_available() and keys is not None and len(keys) > 0:
+            mean_k, max_disp, _ = compute_deroped_mean_c(keys)
+            dists = np.linalg.norm(keys - mean_k, axis=-1)
+            avg_disp = float(np.mean(dists)) if len(dists) > 0 else 0.0
+            return mean_k, max_disp, avg_disp
+    except Exception:
+        pass
+
     mean_k = np.mean(keys, axis=0)
     dists = np.linalg.norm(keys - mean_k, axis=-1)
     max_dispersion = float(np.max(dists))
@@ -35,6 +45,14 @@ def compute_normalized_dispersion(keys: np.ndarray) -> float:
     Decoupled from massive activation outlier channel magnitudes.
     On Qwen2.5-0.5B, real keys have Euclidean MAD ~8.32 but normalized MAD ~0.7965.
     """
+    try:
+        from kvmem_fusion.c_engine_bindings import is_c_engine_available, compute_deroped_mean_c
+        if is_c_engine_available() and keys is not None and len(keys) > 0:
+            _, _, norm_disp = compute_deroped_mean_c(keys)
+            return norm_disp
+    except Exception:
+        pass
+
     norms = np.linalg.norm(keys, axis=-1, keepdims=True)
     norm_keys = keys / np.maximum(norms, 1e-12)
     norm_mean = np.mean(norm_keys, axis=0)
@@ -172,6 +190,25 @@ class AntiCollapseSplitter:
         """
         if block.doublet_centroids is not None:
             return True, block.doublet_centroids
+
+        # Native C engine acceleration with pure Python fallback
+        try:
+            from kvmem_fusion.c_engine_bindings import is_c_engine_available, inspect_and_split_c
+            if is_c_engine_available() and block.keys is not None and len(block.keys) > 0:
+                thresh = self.dispersion_threshold if self.use_normalized else 1000.0
+                is_split, centroids, _ = inspect_and_split_c(
+                    block.keys,
+                    dispersion_threshold=thresh
+                )
+                if not self.use_normalized:
+                    if block.dispersion <= self.dispersion_threshold:
+                        return False, [block.mean_k]
+                if is_split:
+                    block.doublet_centroids = centroids
+                    return True, centroids
+                return False, [block.mean_k]
+        except Exception:
+            pass
 
         metric = block.norm_dispersion if self.use_normalized else block.dispersion
         if metric <= self.dispersion_threshold:
@@ -319,6 +356,9 @@ class IFRRetriever:
         )
         self.blocks: Dict[str, IFRBlock] = {}
         self.content_hashes: Dict[str, str] = {}
+        self._cached_block_ids: Optional[List[str]] = None
+        self._cached_all_mean_keys: Optional[np.ndarray] = None
+        self._cached_block_to_idx: Optional[Dict[str, int]] = None
 
     @property
     def block_store(self) -> Dict[str, IFRBlock]:
@@ -327,6 +367,7 @@ class IFRRetriever:
     @block_store.setter
     def block_store(self, val: Dict[str, IFRBlock]):
         self.blocks = val
+        self._cached_block_ids = None
 
     def add_block(self, block: IFRBlock, parent_hash: Optional[str] = None) -> str:
         """
@@ -347,12 +388,16 @@ class IFRRetriever:
         self.content_hashes[h_str] = block.block_id
         self.blocks[block.block_id] = block
         self.index.block_store[block.block_id] = block
+        self._cached_block_ids = None
         return block.block_id
 
     def build_index(self):
         """Build L1 IVF index over unique registered blocks."""
         unique_blocks = list(self.blocks.values())
         self.index.train_and_index(unique_blocks)
+        self._cached_block_ids = list(self.blocks.keys())
+        self._cached_all_mean_keys = np.array([self.blocks[bid].mean_k for bid in self._cached_block_ids], dtype=np.float32)
+        self._cached_block_to_idx = {bid: idx for idx, bid in enumerate(self._cached_block_ids)}
 
     def retrieve(self, query: np.ndarray, top_k: Optional[int] = None) -> Tuple[List[str], Dict[str, float]]:
         """
@@ -368,11 +413,18 @@ class IFRRetriever:
             "discarded_mass": 0.0
         }
 
-        block_ids = list(self.blocks.keys())
-        if not block_ids:
+        if unique_count == 0:
             return [], meta
 
-        all_mean_keys = np.array([self.blocks[bid].mean_k for bid in block_ids])
+        if self._cached_block_ids is None or len(self._cached_block_ids) != unique_count:
+            self._cached_block_ids = list(self.blocks.keys())
+            self._cached_all_mean_keys = np.array([self.blocks[bid].mean_k for bid in self._cached_block_ids], dtype=np.float32)
+            self._cached_block_to_idx = {bid: idx for idx, bid in enumerate(self._cached_block_ids)}
+
+        block_ids = self._cached_block_ids
+        all_mean_keys = self._cached_all_mean_keys
+        block_to_idx = self._cached_block_to_idx
+
         all_logits = self.lse_tracker.compute_logits(query, all_mean_keys)
         full_lse, _ = self.lse_tracker.compute_lse(all_logits) if len(all_logits) > 0 else (0.0, 1.0)
 
@@ -403,9 +455,8 @@ class IFRRetriever:
             blk = self.blocks.get(bid)
             if blk is None:
                 continue
-            is_split, sub_centroids = self.index.anti_collapse.inspect_and_split(blk)
-            if is_split:
-                cand_vectors.append(np.mean(sub_centroids, axis=0))
+            if blk.doublet_centroids is not None:
+                cand_vectors.append(np.mean(blk.doublet_centroids, axis=0))
             else:
                 cand_vectors.append(blk.mean_k)
             valid_candidates.append(bid)

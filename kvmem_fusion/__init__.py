@@ -13,6 +13,7 @@ from kvmem_fusion.ifr import (
 )
 from kvmem_fusion.spill_manager import (
     SuperTileSpillManager,
+    DiskSpillManager,
     SuperTileManifest,
     BlockLocation,
 )
@@ -41,6 +42,18 @@ from kvmem_fusion.metal_attention_hook import (
     benchmark_sdpa_vs_eager,
 )
 
+from kvmem_fusion.c_engine_bindings import (
+    is_c_engine_available,
+    get_c_engine_lib,
+    neon_dot_c,
+    compute_deroped_mean_c,
+    inspect_and_split_c,
+    rank_subcentroids_cosine_c,
+    solve_ubba_ladder_c,
+    paged_table_translate_c,
+    gather_paged_tokens_c,
+)
+
 __all__ = [
     "CanonicalAtomStore",
     "KVBlock",
@@ -53,6 +66,7 @@ __all__ = [
     "UEFCEvaluationGate",
     "compute_deroped_mean",
     "SuperTileSpillManager",
+    "DiskSpillManager",
     "SuperTileManifest",
     "BlockLocation",
     "negotiate_token_budget",
@@ -74,6 +88,15 @@ __all__ = [
     "apply_metal_attention_hooks",
     "remove_metal_attention_hooks",
     "benchmark_sdpa_vs_eager",
+    "is_c_engine_available",
+    "get_c_engine_lib",
+    "neon_dot_c",
+    "compute_deroped_mean_c",
+    "inspect_and_split_c",
+    "rank_subcentroids_cosine_c",
+    "solve_ubba_ladder_c",
+    "paged_table_translate_c",
+    "gather_paged_tokens_c",
 ]
 
 

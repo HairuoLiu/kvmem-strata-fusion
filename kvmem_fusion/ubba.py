@@ -162,10 +162,26 @@ def solve_ubba_greedy(
     # Check feasibility
     is_feasible = total_admissible_weight >= target_coverage
 
-    # Step 2: Sort by efficiency descending (highest coverage per byte first)
-    admissible_items.sort(key=lambda x: x[0], reverse=True)
+    # Step 2 & 3: Fast Native C Engine Path (with pure Python fallback)
+    use_c_engine = False
+    selected_indices = None
+    try:
+        from kvmem_fusion.c_engine_bindings import is_c_engine_available, solve_ubba_ladder_c
+        if is_c_engine_available() and len(admissible_items) > 0:
+            block_indices = np.arange(len(admissible_items), dtype=np.uint32)
+            fidelities_arr = np.array([item[5] for item in admissible_items], dtype=np.float32)
+            bytes_arr = np.array([item[1] for item in admissible_items], dtype=np.float32)
+            selected_indices = solve_ubba_ladder_c(
+                block_indices,
+                fidelities_arr,
+                bytes_arr,
+                target_coverage,
+                effective_rho_floor
+            )
+            use_c_engine = True
+    except Exception:
+        use_c_engine = False
 
-    # Step 3: Greedy Accumulation
     allocated_tiers: Dict[str, str] = {}
     tier_biases: Dict[str, float] = {}
     total_bytes = 0
@@ -174,19 +190,35 @@ def solve_ubba_greedy(
     shadow_price = 0.0
     marginal_cost = 0
 
-    for eff, cost, blk_id, tier_name, rho, weight in admissible_items:
-        allocated_tiers[blk_id] = tier_name
-        tp = block_map[blk_id].tier_profiles[tier_name]
-        tier_biases[blk_id] = tp.get_tier_bias(s=s_scale)
+    if use_c_engine and selected_indices is not None:
+        for idx in selected_indices:
+            eff, cost, blk_id, tier_name, rho, weight = admissible_items[idx]
+            allocated_tiers[blk_id] = tier_name
+            tp = block_map[blk_id].tier_profiles[tier_name]
+            tier_biases[blk_id] = tp.get_tier_bias(s=s_scale)
 
-        total_bytes += cost
-        cum_weight += weight
-        selected_rhos.append(rho)
-        shadow_price = 1.0 / eff if eff > 0 else 0.0  # C / w (marginal byte price)
-        marginal_cost = cost
+            total_bytes += cost
+            cum_weight += weight
+            selected_rhos.append(rho)
+            shadow_price = 1.0 / eff if eff > 0 else 0.0
+            marginal_cost = cost
+    else:
+        # Step 2: Sort by efficiency descending (highest coverage per byte first)
+        admissible_items.sort(key=lambda x: x[0], reverse=True)
 
-        if cum_weight >= target_coverage:
-            break
+        for eff, cost, blk_id, tier_name, rho, weight in admissible_items:
+            allocated_tiers[blk_id] = tier_name
+            tp = block_map[blk_id].tier_profiles[tier_name]
+            tier_biases[blk_id] = tp.get_tier_bias(s=s_scale)
+
+            total_bytes += cost
+            cum_weight += weight
+            selected_rhos.append(rho)
+            shadow_price = 1.0 / eff if eff > 0 else 0.0  # C / w (marginal byte price)
+            marginal_cost = cost
+
+            if cum_weight >= target_coverage:
+                break
 
     t_end = time.perf_counter()
     latency_ms = (t_end - t_start) * 1000.0

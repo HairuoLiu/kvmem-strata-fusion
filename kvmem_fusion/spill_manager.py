@@ -88,6 +88,11 @@ class SuperTileManifest:
     v_offset_bytes: int
     k_canon_offset_bytes: int
     created_at: float = field(default_factory=time.time)
+    has_raw: bool = False
+    raw_k_offset_bytes: int = 0
+    raw_v_offset_bytes: int = 0
+    raw_shape: Optional[List[int]] = None
+    raw_dtype: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -105,11 +110,19 @@ class SuperTileManifest:
             "v_offset_bytes": self.v_offset_bytes,
             "k_canon_offset_bytes": self.k_canon_offset_bytes,
             "created_at": self.created_at,
+            "has_raw": self.has_raw,
+            "raw_k_offset_bytes": self.raw_k_offset_bytes,
+            "raw_v_offset_bytes": self.raw_v_offset_bytes,
+            "raw_shape": self.raw_shape,
+            "raw_dtype": self.raw_dtype,
         }
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "SuperTileManifest":
-        return cls(**data)
+        # Extract only fields that exist in cls
+        valid_fields = {f for f in cls.__dataclass_fields__}
+        filtered = {k: v for k, v in data.items() if k in valid_fields}
+        return cls(**filtered)
 
 
 @dataclass
@@ -423,7 +436,26 @@ class SuperTileSpillManager:
             k_offset = tensors_offset
             v_offset = k_offset + tensor_padded_len
             k_canon_offset = v_offset + tensor_padded_len
-            total_file_size = k_canon_offset + tensor_padded_len
+            base_file_size = k_canon_offset + tensor_padded_len
+
+            # Check if all blocks carry full multi-head/raw tensors
+            has_raw = all(getattr(b, "raw_k", None) is not None and getattr(b, "raw_v", None) is not None for b in blocks)
+            raw_k_stack = None
+            raw_v_stack = None
+            raw_k_offset = 0
+            raw_v_offset = 0
+            raw_dtype = None
+            if has_raw:
+                raw_dtype = blocks[0].raw_k.dtype
+                raw_k_stack = np.stack([b.raw_k for b in blocks], axis=0).astype(raw_dtype)
+                raw_v_stack = np.stack([b.raw_v for b in blocks], axis=0).astype(raw_dtype)
+                raw_tensor_bytes = raw_k_stack.nbytes
+                raw_tensor_padded = align_to_page(raw_tensor_bytes, self.page_size)
+                raw_k_offset = base_file_size
+                raw_v_offset = raw_k_offset + raw_tensor_padded
+                total_file_size = raw_v_offset + raw_tensor_padded
+            else:
+                total_file_size = base_file_size
 
             dtype_code = DTYPE_CODE_MAP.get(dtype, 3)
 
@@ -468,9 +500,25 @@ class SuperTileSpillManager:
 
                 # Write K canonical
                 f.write(k_canon_stack.tobytes())
-                pad_bytes_4 = total_file_size - f.tell()
+                pad_bytes_4 = base_file_size - f.tell()
                 if pad_bytes_4 > 0:
                     f.write(b"\x00" * pad_bytes_4)
+
+                # Write raw multi-head tensors if present
+                if has_raw and raw_k_stack is not None and raw_v_stack is not None:
+                    pad_bytes_raw1 = raw_k_offset - f.tell()
+                    if pad_bytes_raw1 > 0:
+                        f.write(b"\x00" * pad_bytes_raw1)
+                    f.write(raw_k_stack.tobytes())
+
+                    pad_bytes_raw2 = raw_v_offset - f.tell()
+                    if pad_bytes_raw2 > 0:
+                        f.write(b"\x00" * pad_bytes_raw2)
+                    f.write(raw_v_stack.tobytes())
+
+                    pad_bytes_raw3 = total_file_size - f.tell()
+                    if pad_bytes_raw3 > 0:
+                        f.write(b"\x00" * pad_bytes_raw3)
 
                 f.flush()
                 os.fsync(f.fileno())
@@ -506,6 +554,24 @@ class SuperTileSpillManager:
                 "k_canonical": kcm,
             }
 
+            if has_raw and raw_k_stack is not None and raw_v_stack is not None:
+                km_raw = np.memmap(
+                    file_path,
+                    dtype=raw_dtype,
+                    mode="c",
+                    offset=raw_k_offset,
+                    shape=raw_k_stack.shape,
+                )
+                vm_raw = np.memmap(
+                    file_path,
+                    dtype=raw_dtype,
+                    mode="c",
+                    offset=raw_v_offset,
+                    shape=raw_v_stack.shape,
+                )
+                self._tile_mmaps[tile_id]["raw_k"] = km_raw
+                self._tile_mmaps[tile_id]["raw_v"] = vm_raw
+
             manifest = SuperTileManifest(
                 tile_id=tile_id,
                 file_path=file_path,
@@ -520,6 +586,11 @@ class SuperTileSpillManager:
                 k_offset_bytes=k_offset,
                 v_offset_bytes=v_offset,
                 k_canon_offset_bytes=k_canon_offset,
+                has_raw=has_raw,
+                raw_k_offset_bytes=raw_k_offset,
+                raw_v_offset_bytes=raw_v_offset,
+                raw_shape=list(raw_k_stack.shape) if has_raw else None,
+                raw_dtype=str(raw_dtype) if has_raw else None,
             )
             self._tiles[tile_id] = manifest
 
@@ -536,6 +607,9 @@ class SuperTileSpillManager:
                 b.k_unrotated = km[idx]
                 b.v = vm[idx]
                 b.k_canonical = kcm[idx]
+                if has_raw and raw_k_stack is not None:
+                    b.raw_k = km_raw[idx]
+                    b.raw_v = vm_raw[idx]
 
                 # Update physical pool references in CASA
                 if b.physical_page_id != -1 and b.physical_page_id < len(self.atom_store.physical_k_pool):
@@ -603,6 +677,26 @@ class SuperTileSpillManager:
             shape=shape,
         )
         mmaps = {"k_unrotated": km, "v": vm, "k_canonical": kcm}
+        if getattr(manifest, "has_raw", False) and manifest.raw_shape is not None:
+            raw_dtype = np.dtype(manifest.raw_dtype)
+            raw_shape = tuple(manifest.raw_shape)
+            km_raw = np.memmap(
+                manifest.file_path,
+                dtype=raw_dtype,
+                mode="c",
+                offset=manifest.raw_k_offset_bytes,
+                shape=raw_shape,
+            )
+            vm_raw = np.memmap(
+                manifest.file_path,
+                dtype=raw_dtype,
+                mode="c",
+                offset=manifest.raw_v_offset_bytes,
+                shape=raw_shape,
+            )
+            mmaps["raw_k"] = km_raw
+            mmaps["raw_v"] = vm_raw
+
         self._tile_mmaps[tile_id] = mmaps
         return mmaps
 
@@ -628,6 +722,9 @@ class SuperTileSpillManager:
                 blk.k_unrotated = mmaps["k_unrotated"][idx]
                 blk.v = mmaps["v"][idx]
                 blk.k_canonical = mmaps["k_canonical"][idx]
+                if "raw_k" in mmaps:
+                    blk.raw_k = mmaps["raw_k"][idx]
+                    blk.raw_v = mmaps["raw_v"][idx]
 
                 duration = time.perf_counter() - t_start
                 self.stats["total_reload_events"] += 1
@@ -827,3 +924,13 @@ class SuperTileSpillManager:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
+
+
+class DiskSpillManager(SuperTileSpillManager):
+    """
+    DiskSpillManager: Production-grade NVMe/SSD Memory-Mapped SuperTile Spill Manager.
+
+    Seamlessly integrates with MetalKVCacheInterceptor for active physical memory reclamation,
+    page-aligned SuperTile persistence, and zero-copy mmap faulting.
+    """
+    pass

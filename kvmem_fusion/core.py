@@ -66,6 +66,10 @@ class KVBlock:
     parent_hash: Optional[str] = None
     k_canonical: Optional[np.ndarray] = None  # Pre-rotated at canonical pos for Tensor Core GEMM
     physical_page_id: int = -1
+    raw_k: Optional[np.ndarray] = None
+    raw_v: Optional[np.ndarray] = None
+    layer_raw_k: Dict[int, np.ndarray] = field(default_factory=dict)
+    layer_raw_v: Dict[int, np.ndarray] = field(default_factory=dict)
 
     def __post_init__(self):
         if len(self.mean_k) == 0:
@@ -161,7 +165,9 @@ class CanonicalAtomStore:
         v: np.ndarray,
         orig_pos_start: int,
         parent_hash: Optional[str] = None,
-        tier: str = "FP8"
+        tier: str = "FP8",
+        raw_k: Optional[np.ndarray] = None,
+        raw_v: Optional[np.ndarray] = None,
     ) -> Tuple[str, str]:
         """Causal prefix hash chain registration.
         Returns: (block_id, current_prefix_hash).
@@ -186,7 +192,9 @@ class CanonicalAtomStore:
             prefix_hash=curr_hash,
             parent_hash=parent_hash,
             tier=tier,
-            physical_page_id=page_id
+            physical_page_id=page_id,
+            raw_k=raw_k,
+            raw_v=raw_v,
         )
         self.blocks[block_id] = block
         self.prefix_chain_index[curr_hash] = block_id

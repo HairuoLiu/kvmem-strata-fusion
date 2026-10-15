@@ -379,18 +379,169 @@ def test_bounded_execution_view_sparsity_and_reconciliation(device):
     interceptor.append_token_ids([1025])
     k_decode = torch.randn(1, 4, 1, 64, device=device, dtype=torch.float16)
     v_decode = torch.randn(1, 4, 1, 64, device=device, dtype=torch.float16)
+    q_decode = torch.randn(1, 4, 1, 64, device=device, dtype=torch.float16)
 
-    out_k_dec0, out_v_dec0 = interceptor.update(k_decode, v_decode, layer_idx=0)
-    out_k_dec1, out_v_dec1 = interceptor.update(k_decode, v_decode, layer_idx=1)
+    # Full backing cache updated in interceptor
+    total_cached = 1025
+    full_k0, full_v0 = interceptor.update(k_decode, v_decode, layer_idx=0)
+    full_k1, full_v1 = interceptor.update(k_decode, v_decode, layer_idx=1)
+    assert full_k0.shape[-2] == total_cached
+    assert full_k1.shape[-2] == total_cached
+
+    # True Q-directed retrieval generates bounded execution view
+    out_k_dec0, out_v_dec0 = interceptor.retrieve_bounded_view(q_decode, full_k0, full_v0, layer_idx=0)
+    out_k_dec1, out_v_dec1 = interceptor.retrieve_bounded_view(q_decode, full_k1, full_v1, layer_idx=1)
 
     # Core assertion: Bounded Execution View satisfies keys.shape[-2] < total_seq_len
-    total_cached = 1025
     assert out_k_dec0.shape[-2] < total_cached, f"Expected bounded view < {total_cached}, got {out_k_dec0.shape[-2]}"
     assert out_k_dec1.shape[-2] == out_k_dec0.shape[-2], "Multi-layer bounded view shape must match across layers"
-    assert out_k_dec0.shape[-2] <= interceptor.indexer_budget
+    assert out_k_dec0.shape[-2] <= interceptor.indexer_budget + interceptor.local_window_tokens
 
     # Reconcilability assertion: reported metrics match returned tensor bit-exactly
     assert interceptor.attended_tokens_last == out_k_dec0.shape[-2]
     expected_sparsity = round(out_k_dec0.shape[-2] / total_cached, 4)
     assert interceptor.last_sparsity_ratio == expected_sparsity
     assert interceptor.last_retrieval_recall is None  # Synthetic arithmetic deleted
+
+    # Attention forward hook consumes bounded view and produces valid shape
+    class DummyAttention(nn.Module):
+        scaling = 1.0 / 8.0
+        layer_idx = 0
+    dummy_attn = DummyAttention()
+    attn_out, _ = metal_sdpa_attention_forward(
+        dummy_attn, q_decode, full_k0, full_v0, past_key_values=interceptor, layer_idx=0
+    )
+    assert attn_out.shape == (1, 1, 4, 64)
+
+
+def test_true_query_driven_retrieval_not_key_proxy(device):
+    """
+    Rigorously verifies OG Critique R1 resolution:
+    1. Retrieval is driven by genuine Query tensor Q, NOT key[-1] proxy.
+    2. When query points to a distinct needle cluster, the correct needle block is retrieved into SDPA input.
+    3. When key[-1] points to needle cluster A but query points to needle cluster B,
+       SDPA receives cluster B's block, proving query dominance over key.
+    4. Bounded keys strictly satisfy keys.shape[-2] <= indexer_budget + local_window_tokens.
+    """
+    block_size = 32
+    head_dim = 64
+    dtype = torch.float16
+
+    interceptor = MetalKVCacheInterceptor(
+        block_size=block_size,
+        head_dim=head_dim,
+        dtype=dtype,
+        device=device,
+    )
+    # Configure tight budgets: local window 64 (2 blocks), indexer budget 96 (allows 1 retrieved block)
+    interceptor.local_window_tokens = 64
+    interceptor.indexer_budget = 96
+
+    # Build 6 distinct blocks (192 tokens total)
+    # Block 0 (tokens 0..31): Needle Cluster Alpha (all +5.0 in dim 0)
+    # Block 1 (tokens 32..63): Needle Cluster Beta (all +5.0 in dim 1)
+    # Block 2 (tokens 64..95): Background Gamma (all +2.0 in dim 2)
+    # Block 3 (tokens 96..127): Background Delta (all +2.0 in dim 3)
+    # Block 4 & 5 (tokens 128..191): Local Window tokens (dim 4)
+    total_tokens = 192
+    interceptor.set_token_ids(list(range(total_tokens)))
+
+    k_np = np.zeros((1, 4, total_tokens, head_dim), dtype=np.float16)
+    v_np = np.zeros((1, 4, total_tokens, head_dim), dtype=np.float16)
+
+    # Block 0: Alpha needle
+    k_np[:, :, 0:32, 0] = 5.0
+    v_np[:, :, 0:32, 0] = 10.0
+
+    # Block 1: Beta needle
+    k_np[:, :, 32:64, 1] = 5.0
+    v_np[:, :, 32:64, 1] = 20.0
+
+    # Block 2: Gamma background
+    k_np[:, :, 64:96, 2] = 2.0
+    v_np[:, :, 64:96, 2] = 30.0
+
+    # Block 3: Delta background
+    k_np[:, :, 96:128, 3] = 2.0
+    v_np[:, :, 96:128, 3] = 40.0
+
+    # Local window blocks
+    k_np[:, :, 128:192, 4] = 1.0
+    v_np[:, :, 128:192, 4] = 50.0
+
+    k_prefill = torch.tensor(k_np, device=device, dtype=dtype)
+    v_prefill = torch.tensor(v_np, device=device, dtype=dtype)
+
+    interceptor.update(k_prefill, v_prefill, layer_idx=0)
+    assert interceptor.active_casa_blocks == 6
+    assert len(interceptor.atom_store.blocks) == 6
+
+    # Block 0 is at orig_pos_start 0, Block 1 is at orig_pos_start 32
+    b0_id = [bid for bid, b in interceptor.atom_store.blocks.items() if b.orig_pos_start == 0][0]
+    b1_id = [bid for bid, b in interceptor.atom_store.blocks.items() if b.orig_pos_start == 32][0]
+
+    # --- TEST CASE 1: Query points to Needle Beta (dim 1), Key[-1] points to Needle Alpha (dim 0) ---
+    # Autoregressive decode token (token 193)
+    interceptor.append_token_ids([192])
+    k_dec = torch.zeros(1, 4, 1, head_dim, device=device, dtype=dtype)
+    v_dec = torch.zeros(1, 4, 1, head_dim, device=device, dtype=dtype)
+    # k_dec points to Needle Alpha! If key-proxy was active, Block 0 would be retrieved.
+    k_dec[:, :, 0, 0] = 5.0
+
+    full_k, full_v = interceptor.update(k_dec, v_dec, layer_idx=0)
+    assert full_k.shape[-2] == 193
+
+    # Genuine Query points to Needle Beta (dim 1)!
+    q_beta = torch.zeros(1, 4, 1, head_dim, device=device, dtype=dtype)
+    q_beta[:, :, 0, 1] = 5.0
+
+    class DummyAttention(nn.Module):
+        scaling = 1.0 / 8.0
+        layer_idx = 0
+    dummy_attn = DummyAttention()
+
+    out_sdpa_beta, _ = metal_sdpa_attention_forward(
+        dummy_attn, q_beta, full_k, full_v, past_key_values=interceptor, layer_idx=0
+    )
+
+    # Retrieval assertions
+    assert b1_id in interceptor.last_retrieved_block_ids, (
+        f"Expected Block 1 (Beta) retrieved by Query, got {interceptor.last_retrieved_block_ids}"
+    )
+    assert b0_id not in interceptor.last_retrieved_block_ids, (
+        "Block 0 (Alpha) should NOT be retrieved when Query points to Beta"
+    )
+
+    # Verify bounded view size
+    bounded_tokens = interceptor.attended_tokens_last
+    assert bounded_tokens <= interceptor.indexer_budget + interceptor.local_window_tokens
+    # 32 (retrieved Block 1) + 64 (local window containing recent tokens) = 96 tokens
+    assert bounded_tokens == 32 + 64
+
+    # --- TEST CASE 2: CONTRAST - Keep Key[-1] identical (Alpha), switch Query to Needle Alpha (dim 0) ---
+    q_alpha = torch.zeros(1, 4, 1, head_dim, device=device, dtype=dtype)
+    q_alpha[:, :, 0, 0] = 5.0
+
+    # Force re-retrieval with query alpha
+    bounded_k_alpha, bounded_v_alpha = interceptor.retrieve_bounded_view(
+        q_alpha, full_k, full_v, layer_idx=0, force_refresh=True
+    )
+    assert b0_id in interceptor.last_retrieved_block_ids, (
+        f"Expected Block 0 (Alpha) retrieved by Query, got {interceptor.last_retrieved_block_ids}"
+    )
+    assert b1_id not in interceptor.last_retrieved_block_ids, (
+        "Block 1 (Beta) should NOT be retrieved when Query points to Alpha"
+    )
+
+    # Verify that the bounded key tensor actually contains Block 0 keys (dim 0 == 5.0) and not Block 1 keys
+    # Tokens 0..31 of bounded_k_alpha correspond to Block 0
+    assert (bounded_k_alpha[0, 0, :32, 0] == 5.0).all()
+    assert (bounded_k_alpha[0, 0, :32, 1] == 0.0).all()
+
+    # And for Beta query, bounded key tensor contains Block 1 keys (dim 1 == 5.0)
+    bounded_k_beta, bounded_v_beta = interceptor.retrieve_bounded_view(
+        q_beta, full_k, full_v, layer_idx=0, force_refresh=True
+    )
+    assert (bounded_k_beta[0, 0, :32, 1] == 5.0).all()
+    assert (bounded_k_beta[0, 0, :32, 0] == 0.0).all()
+

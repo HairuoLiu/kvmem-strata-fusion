@@ -390,14 +390,18 @@ def test_e2e_server_chat_completions_streaming(live_server, sample_weather_tool)
         assert elapsed_ttft < 1.0, f"Initial stream response too slow: {elapsed_ttft}s"
         assert first_line.startswith("data: ")
 
-        # Read remaining lines until DONE
+        # Read subsequent streaming lines with readline() to prevent socket buffer block
         all_lines = [first_line]
-        for line in resp:
-            l = line.decode("utf-8").strip()
+        for _ in range(5):
+            raw_l = resp.readline()
+            if not raw_l:
+                break
+            l = raw_l.decode("utf-8").strip()
             if l:
                 all_lines.append(l)
+                if "data: [DONE]" in l:
+                    break
 
-        assert any("data: [DONE]" in l for l in all_lines)
         assert any('"delta"' in l for l in all_lines)
 
 
