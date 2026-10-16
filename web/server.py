@@ -359,9 +359,9 @@ class KVMemAppHandler(BaseHTTPRequestHandler):
             raw_max_tokens = req_data.get("max_tokens", req_data.get("max_new_tokens"))
             max_tokens = negotiate_token_budget(raw_max_tokens, default_tokens=2048, min_tokens=16, max_ceiling=4096)
             temperature = float(req_data.get("temperature", 0.6))
-            top_p = float(req_data.get("top_p", 0.9))
-            top_k = int(req_data.get("top_k", 40))
-            repetition_penalty = float(req_data.get("repetition_penalty", 1.15))
+            top_p = float(req_data.get("top_p", 0.95))
+            top_k = int(req_data.get("top_k", 20))
+            repetition_penalty = float(req_data.get("repetition_penalty", 1.1))
 
             req_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
             t0 = time.perf_counter()
