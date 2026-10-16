@@ -45,8 +45,8 @@ OLLAMA_BASE = "http://127.0.0.1:11434"
 
 def stream_ollama_chat(messages, model, max_tokens, temperature):
     """Fallback generator streaming from Ollama /api/chat."""
-    ollama_model = "qwen2.5:7b"
-    if model in ("qwen2.5:7b", "qwen2.5:0.5b"):
+    ollama_model = "qwen3.8-flash-next"
+    if model:
         ollama_model = model
     payload = json.dumps({
         "model": ollama_model,
@@ -97,7 +97,7 @@ TOTAL_CONTEXT_TOKENS = 0
 LAST_GENERATION_SPEED = 32.3
 LAST_TTFT_MS = 166.0
 ACTIVE_SESSIONS = {}
-CURRENT_ACTIVE_MODEL = "Qwen3.8-27B-GSQ"
+CURRENT_ACTIVE_MODEL = "Qwen3.8-Flash-Next"
 
 def get_system_memory_info():
     used_gb = 18.5
@@ -195,13 +195,10 @@ class KVMemAppHandler(BaseHTTPRequestHandler):
 
         if self.path in ("/v1/models", "/api/tags") or self.path.startswith("/v1/models/"):
             models = [
-                "qwen3",
                 "qwen3.8",
-                "qwen3.8-27b",
                 "qwen3.8-flash-next",
-                "Qwen3-0.6B-Instruct (Local In-Process Baseline MPS)",
-                "Qwen3.8-27B-GSQ (IQ3_S-mtp / 27B Dense)",
-                "Qwen3.8-Flash-Next (125B MoE / ISTA-DASLab GSQ)",
+                "Qwen3.8-Flash-Next (125B MoE / Hybrid Linear-Sparse Attention)",
+                "Qwen3.8-Flash-Next",
                 "default"
             ]
             self.send_response(200)

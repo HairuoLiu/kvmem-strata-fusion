@@ -1318,25 +1318,6 @@
           </div>
         </div>
 
-        <!-- Flagship 2: Qwen3.8-27B-GSQ Dense -->
-        <div class="model-card" data-model="Qwen3.8-27B-GSQ (IQ3_S-mtp / 27B Dense)" onclick="selectModel(this)">
-          <div class="model-card-top">
-            <span class="model-name">Qwen3.8-27B-GSQ</span>
-            <div class="model-card-badges">
-              <span class="badge badge-blue">27B 稠密</span>
-              <span class="badge badge-purple">全能模型</span>
-              <span class="badge badge-green">256K 上下文</span>
-            </div>
-          </div>
-          <div class="model-desc-text">
-            高精全能大模型。支持超长文本理解，在数理逻辑推演、长文精读提炼与专业问答场景表现卓越。
-          </div>
-          <div class="model-meta">
-            <span>稠密参数: 27.0B</span>
-            <span>256K 超长窗口</span>
-            <span>端侧轻盈驻留</span>
-          </div>
-        </div>
 
         <!-- Flagship 3: Qwen3.8-Coder-30B MoE -->
         <div class="model-card" data-model="Qwen3.8-Coder-30B (Low-RAM MoE / 64K)" onclick="selectModel(this)">
@@ -1548,12 +1529,9 @@
       if (currentModel.includes("Qwen3.8-Flash-Next")) {
         activeModelName.textContent = "Qwen3.8-Flash-Next (125B MoE)";
         activeModelBadge.textContent = "MoE 125B";
-      } else if (currentModel.includes("27B")) {
-        activeModelName.textContent = "Qwen3.8-27B-GSQ";
-        activeModelBadge.textContent = "27B Dense (256K)";
       } else if (currentModel.includes("Coder-30B")) {
-        activeModelName.textContent = "Qwen3.8-Coder-30B";
-        activeModelBadge.textContent = "29.6B MoE";
+        activeModelName.textContent = "Qwen3.8-Flash-Coder (MoE)";
+        activeModelBadge.textContent = "Flash MoE";
       } else {
         activeModelName.textContent = currentModel;
         activeModelBadge.textContent = "Qwen3.8 Engine";

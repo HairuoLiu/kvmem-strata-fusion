@@ -100,7 +100,6 @@ class KVMemNativeEngine:
 
     def _locate_model_snapshot(self) -> str:
         candidates = [
-            os.path.expanduser("~/.cache/huggingface/hub/models--Qwen--Qwen3.8-27B/snapshots/*"),
             os.path.expanduser("~/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/*"),
             os.path.expanduser("~/.cache/huggingface/hub/models--Qwen--Qwen3-0.6B/snapshots/*"),
         ]

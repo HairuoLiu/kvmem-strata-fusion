@@ -10,12 +10,11 @@ class MenuBarController: NSObject {
     var statusString = "正在检测..."
     var speedString = "-- tok/s"
     var memString = "-- GB"
-    var currentModel = "Qwen3-0.6B-Instruct (Local In-Process Baseline MPS)"
+    var currentModel = "Qwen3.8-Flash-Next (125B MoE)"
     
     let availableModels = [
-        "Qwen3-0.6B-Instruct (Local In-Process Baseline MPS)",
-        "Qwen3.8-27B-GSQ",
-        "Qwen3.8-Flash-Next (125B MoE)"
+        "Qwen3.8-Flash-Next (125B MoE)",
+        "Qwen3.8-Flash-Coder (MoE)"
     ]
 
     override init() {
@@ -51,7 +50,7 @@ class MenuBarController: NSObject {
                         }
                     }
                     self.statusString = "● 运行中 (端口 8080)"
-                    let shortName = self.currentModel.contains("0.6B") ? "0.6B" : (self.currentModel.replacingOccurrences(of: "Qwen3.8-", with: "").components(separatedBy: " ").first ?? "27B")
+                    let shortName = "Flash-Next"
                     self.statusItem.button?.title = "⚡ KVMem (\(shortName))"
                 } else {
                     self.isRunning = false
