@@ -1680,7 +1680,7 @@
               <details class="think-box">
                 <summary class="think-summary">
                   <span class="think-indicator"></span>
-                  <span>已完成思考 (点击展开思维链)</span>
+                  <span>🧠 思考过程已完成 (点击展开思维链)</span>
                 </summary>
                 <div class="think-body">${thinkText.replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\n/g, "<br>")}</div>
               </details>
@@ -1693,10 +1693,10 @@
           const thinkText = rawRemain.replace(/\*\[(?:生成已中止|生成已中断|已中断|引擎连接提示)[^\]]*\]\*/g, "").trim();
           mainText = (str.slice(0, thinkStart) + (isInterrupted ? "\n\n*[生成已中断]*" : "")).trim();
           thinkHtml = `
-            <details class="think-box" ${isInterrupted ? "" : "open"}>
+            <details class="think-box">
               <summary class="think-summary">
                 <span class="think-indicator" style="${isInterrupted ? 'background:#f85149;' : 'animation: pulse 1.2s infinite;'}"></span>
-                <span>${isInterrupted ? '思考过程 (已中断)' : '正在深度思考中...'}</span>
+                <span>${isInterrupted ? '🧠 思考过程 (已中断)' : '🧠 正在深度思考中... (点击展开实时思维链)'}</span>
               </summary>
               <div class="think-body">${thinkText.replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\n/g, "<br>")}</div>
             </details>

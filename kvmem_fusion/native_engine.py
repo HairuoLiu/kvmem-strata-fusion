@@ -155,11 +155,64 @@ class KVMemNativeEngine:
                 print(f"[KVMem Native Engine] ❌ Warning: Failed to load local model weights: {e}")
                 self.is_loaded = False
 
+    @staticmethod
+    def _sample_next_token(
+        logits: torch.Tensor,
+        temperature: float = 0.6,
+        top_p: float = 0.9,
+        top_k: int = 40,
+        repetition_penalty: float = 1.15,
+        generated_tokens: Optional[List[int]] = None,
+    ) -> torch.Tensor:
+        """
+        Samples next token using temperature scaling, repetition penalty,
+        top-k filtering, and nucleus top-p filtering.
+        """
+        if logits.dim() == 2:
+            cur_logits = logits[0].clone()
+        else:
+            cur_logits = logits.clone()
+
+        if repetition_penalty != 1.0 and generated_tokens:
+            for t in set(generated_tokens):
+                if cur_logits[t] < 0:
+                    cur_logits[t] *= repetition_penalty
+                else:
+                    cur_logits[t] /= repetition_penalty
+
+        if temperature <= 0.01:
+            return torch.argmax(cur_logits, dim=-1, keepdim=True).unsqueeze(0)
+
+        cur_logits = cur_logits / temperature
+
+        if 0 < top_k < cur_logits.size(-1):
+            top_k_vals, _ = torch.topk(cur_logits, top_k)
+            min_val = top_k_vals[-1]
+            cur_logits[cur_logits < min_val] = -float("Inf")
+
+        if top_p < 1.0:
+            sorted_logits, sorted_indices = torch.sort(cur_logits, descending=True)
+            cumulative_probs = torch.cumsum(torch.softmax(sorted_logits, dim=-1), dim=-1)
+            sorted_indices_to_remove = cumulative_probs > top_p
+            sorted_indices_to_remove[1:] = sorted_indices_to_remove[:-1].clone()
+            sorted_indices_to_remove[0] = False
+            indices_to_remove = sorted_indices[sorted_indices_to_remove]
+            cur_logits[indices_to_remove] = -float("Inf")
+
+        probs = torch.softmax(cur_logits, dim=-1)
+        if torch.isnan(probs).any() or torch.isinf(probs).any():
+            return torch.argmax(logits, dim=-1, keepdim=True)
+
+        return torch.multinomial(probs.unsqueeze(0), num_samples=1)
+
     def stream_chat(
         self,
         messages: List[Dict[str, Any]],
         max_new_tokens: int = 512,
-        temperature: float = 0.7,
+        temperature: float = 0.6,
+        top_p: float = 0.9,
+        top_k: int = 40,
+        repetition_penalty: float = 1.15,
         tools: Optional[List[Dict[str, Any]]] = None,
     ) -> Generator[Dict[str, Any], None, None]:
         """
@@ -176,6 +229,21 @@ class KVMemNativeEngine:
 
         # 1. Format ChatML Prompt
         prompt = self._format_messages(messages, tools=tools)
+
+        # Semantic language detection for Qwen reasoning stabilization
+        last_user_msg = ""
+        for m in reversed(messages):
+            if m.get("role") == "user":
+                last_user_msg = str(m.get("content", ""))
+                break
+        is_chinese = any("\u4e00" <= c <= "\u9fff" for c in last_user_msg)
+        is_short_query = len(last_user_msg.strip()) <= 40
+
+        prefix_delta = ""
+        if is_chinese and prompt.endswith("<|im_start|>assistant\n"):
+            prompt = prompt + "<think>\n好的，"
+            prefix_delta = "<think>\n好的，"
+
         inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
         input_ids = inputs["input_ids"]
         prompt_len = input_ids.shape[1]
@@ -228,6 +296,18 @@ class KVMemNativeEngine:
         # 3. High-Speed Autoregressive Decode Loop using MetalKVCacheInterceptor
         generated_tokens = 0
         stop_tokens = {self.tokenizer.eos_token_id, 151645, 151643}
+        generated_token_ids: List[int] = []
+        accumulated_text = prefix_delta
+        in_thinking = bool(prefix_delta)
+        think_tokens = len(self.tokenizer.encode(prefix_delta, add_special_tokens=False)) if prefix_delta else 0
+
+        if prefix_delta:
+            generated_tokens += 1
+            yield {
+                "delta": prefix_delta,
+                "done": False,
+                "tok_idx": generated_tokens
+            }
 
         with torch.no_grad():
             # Initial hardware-fused Metal SDPA prefill pass
@@ -235,12 +315,15 @@ class KVMemNativeEngine:
             past_key_values = outputs.past_key_values
             next_token_logits = outputs.logits[:, -1, :]
 
-            # First token sampling
-            if temperature > 0:
-                probs = torch.softmax(next_token_logits / temperature, dim=-1)
-                next_token = torch.multinomial(probs, num_samples=1)
-            else:
-                next_token = torch.argmax(next_token_logits, dim=-1, keepdim=True)
+            # First token sampling with nucleus and repetition penalty
+            next_token = self._sample_next_token(
+                next_token_logits,
+                temperature=temperature,
+                top_p=top_p,
+                top_k=top_k,
+                repetition_penalty=repetition_penalty,
+                generated_tokens=generated_token_ids,
+            )
 
             t_first_token = time.perf_counter()
             self.last_ttft_ms = round((t_first_token - t_start) * 1000, 1)
@@ -251,10 +334,17 @@ class KVMemNativeEngine:
 
             tok_val = next_token.item()
             if tok_val not in stop_tokens:
+                generated_token_ids.append(tok_val)
                 token_text = self.tokenizer.decode([tok_val], skip_special_tokens=True)
+                accumulated_text += token_text
                 generated_tokens += 1
                 if isinstance(past_key_values, MetalKVCacheInterceptor):
                     past_key_values.append_token_ids([tok_val])
+
+                if "</think>" in accumulated_text:
+                    in_thinking = False
+                elif in_thinking:
+                    think_tokens += 1
 
                 yield {
                     "delta": token_text,
@@ -269,21 +359,50 @@ class KVMemNativeEngine:
                         past_key_values = outputs.past_key_values
                         next_token_logits = outputs.logits[:, -1, :]
 
-                        if temperature > 0:
-                            probs = torch.softmax(next_token_logits / temperature, dim=-1)
-                            next_token = torch.multinomial(probs, num_samples=1)
-                        else:
-                            next_token = torch.argmax(next_token_logits, dim=-1, keepdim=True)
+                        # Runaway thinking budget limiter for quick conversational greetings
+                        if in_thinking and is_short_query and think_tokens >= 50:
+                            force_transition = "\n</think>\n\n"
+                            yield {
+                                "delta": force_transition,
+                                "done": False,
+                                "tok_idx": generated_tokens
+                            }
+                            accumulated_text += force_transition
+                            force_ids = self.tokenizer.encode(force_transition, add_special_tokens=False)
+                            force_tensor = torch.tensor([force_ids], device=self.device)
+                            outputs = self.model(force_tensor, past_key_values=past_key_values, use_cache=True)
+                            past_key_values = outputs.past_key_values
+                            next_token_logits = outputs.logits[:, -1, :]
+                            if isinstance(past_key_values, MetalKVCacheInterceptor):
+                                past_key_values.append_token_ids(force_ids)
+                            generated_token_ids.extend(force_ids)
+                            in_thinking = False
+
+                        next_token = self._sample_next_token(
+                            next_token_logits,
+                            temperature=temperature,
+                            top_p=top_p,
+                            top_k=top_k,
+                            repetition_penalty=repetition_penalty,
+                            generated_tokens=generated_token_ids,
+                        )
 
                         tok_val = next_token.item()
                         if tok_val in stop_tokens:
                             break
 
+                        generated_token_ids.append(tok_val)
                         if isinstance(past_key_values, MetalKVCacheInterceptor):
                             past_key_values.append_token_ids([tok_val])
 
                         token_text = self.tokenizer.decode([tok_val], skip_special_tokens=True)
+                        accumulated_text += token_text
                         generated_tokens += 1
+
+                        if "</think>" in accumulated_text:
+                            in_thinking = False
+                        elif in_thinking:
+                            think_tokens += 1
 
                         yield {
                             "delta": token_text,

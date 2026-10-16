@@ -358,7 +358,10 @@ class KVMemAppHandler(BaseHTTPRequestHandler):
             # Negotiate token budget gracefully (0 -> 2048, never 0)
             raw_max_tokens = req_data.get("max_tokens", req_data.get("max_new_tokens"))
             max_tokens = negotiate_token_budget(raw_max_tokens, default_tokens=2048, min_tokens=16, max_ceiling=4096)
-            temperature = float(req_data.get("temperature", 0.7))
+            temperature = float(req_data.get("temperature", 0.6))
+            top_p = float(req_data.get("top_p", 0.9))
+            top_k = int(req_data.get("top_k", 40))
+            repetition_penalty = float(req_data.get("repetition_penalty", 1.15))
 
             req_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
             t0 = time.perf_counter()
@@ -391,9 +394,15 @@ class KVMemAppHandler(BaseHTTPRequestHandler):
                             messages_formatted,
                             max_new_tokens=max_tokens,
                             temperature=temperature,
+                            top_p=top_p,
+                            top_k=top_k,
+                            repetition_penalty=repetition_penalty,
                             tools=None
                         )
                         backend_type = "native"
+                    except Exception as e:
+                        print(f"[KVMem Server] Notice: Native Engine failed, attempting Ollama: {e}")
+                        generator = None
                     except Exception as e:
                         print(f"[KVMem Server] Notice: Native Engine failed, attempting Ollama: {e}")
                         generator = None
@@ -455,7 +464,14 @@ class KVMemAppHandler(BaseHTTPRequestHandler):
 
                 if NATIVE_ENGINE and NATIVE_ENGINE.is_loaded:
                     try:
-                        for chunk in NATIVE_ENGINE.stream_chat(messages_formatted, max_new_tokens=max_tokens, temperature=temperature):
+                        for chunk in NATIVE_ENGINE.stream_chat(
+                            messages_formatted,
+                            max_new_tokens=max_tokens,
+                            temperature=temperature,
+                            top_p=top_p,
+                            top_k=top_k,
+                            repetition_penalty=repetition_penalty,
+                        ):
                             if not chunk.get("done", False):
                                 full_content += chunk.get("delta", "")
                                 tok_count += 1
